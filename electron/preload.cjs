@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
   getLayoutMode: () => ipcRenderer.invoke("layout-mode:get"),
   updateLayoutMode: (layoutMode) =>
     ipcRenderer.invoke("layout-mode:update", layoutMode),
+  getEditorPreferences: () => ipcRenderer.invoke("editor-preferences:get"),
+  updateEditorPreferences: (payload) =>
+    ipcRenderer.invoke("editor-preferences:update", payload),
   saveContent: (payload) => ipcRenderer.invoke("notes:save-content", payload),
   updateAppearance: (payload) =>
     ipcRenderer.invoke("notes:update-appearance", payload),
@@ -19,6 +22,8 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
   attachNote: (noteId) => ipcRenderer.invoke("notes:attach", noteId),
   exportNote: (payload) => ipcRenderer.invoke("export:note", payload),
   saveAsset: (payload) => ipcRenderer.invoke("assets:save-url", payload),
+  listFonts: () => ipcRenderer.invoke("fonts:list"),
+  moveWindowBy: (payload) => ipcRenderer.invoke("window:move-by", payload),
   setAlwaysOnTop: (alwaysOnTop) =>
     ipcRenderer.invoke("window:set-always-on-top", alwaysOnTop),
   onOpenPreferences: (callback) => {
@@ -35,6 +40,11 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
     const listener = (_event, layoutMode) => callback(layoutMode);
     ipcRenderer.on("layout-mode:changed", listener);
     return () => ipcRenderer.removeListener("layout-mode:changed", listener);
+  },
+  onEditorPreferencesChanged: (callback) => {
+    const listener = (_event, editorPreferences) => callback(editorPreferences);
+    ipcRenderer.on("editor-preferences:changed", listener);
+    return () => ipcRenderer.removeListener("editor-preferences:changed", listener);
   },
   onNotesChanged: (callback) => {
     const listener = (_event, payload) => callback(payload);

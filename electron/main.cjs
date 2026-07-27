@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const { fileURLToPath } = require("url");
 const {
   app,
@@ -14,6 +16,7 @@ const {
 const { StickyStore } = require("./store.cjs");
 
 const APP_NAME = "NotePane";
+const execFileAsync = promisify(execFile);
 const ICON_PNG_PATH = path.join(__dirname, "..", "build", "icon.png");
 const TABS_MIN_WIDTH = 640;
 const TABS_MIN_HEIGHT = 500;
@@ -23,6 +26,17 @@ const STICKY_MIN_WIDTH = 320;
 const STICKY_MIN_HEIGHT = 260;
 const STICKY_WINDOW_GAP = 18;
 const STICKY_WINDOW_MARGIN = 28;
+const TRAFFIC_LIGHT_X = 14;
+const TABS_TRAFFIC_LIGHT_Y = 15;
+const STICKY_TRAFFIC_LIGHT_Y = 10;
+const STICKY_PASTEL_PALETTE = [
+  "#fff2b8",
+  "#ffd7e8",
+  "#dff4d7",
+  "#d9efff",
+  "#eadcff",
+  "#ffe4ca",
+];
 const windows = new Map();
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const userDataDirOverride = process.env.BLOCKNOTE_STICKY_USER_DATA_DIR;
@@ -31,6 +45,7 @@ const exportDirectoryOverride = process.env.BLOCKNOTE_STICKY_EXPORT_DIR;
 let store;
 let quitting = false;
 const manuallyClosedStickyNoteIds = new Set();
+let installedFontsPromise = null;
 
 if (userDataDirOverride) {
   app.setPath("userData", userDataDirOverride);
@@ -38,6 +53,7 @@ if (userDataDirOverride) {
 
 function createWindow(note, options = {}) {
   const isPrimary = Boolean(options.primary);
+  const trafficLightPosition = resolveTrafficLightPosition(isPrimary);
   const visibleBounds = normalizeWindowBounds(note.bounds, {
     minWidth: isPrimary ? TABS_MIN_WIDTH : STICKY_MIN_WIDTH,
     minHeight: isPrimary ? TABS_MIN_HEIGHT : STICKY_MIN_HEIGHT,
@@ -47,10 +63,12 @@ function createWindow(note, options = {}) {
     minWidth: isPrimary ? TABS_MIN_WIDTH : STICKY_MIN_WIDTH,
     minHeight: isPrimary ? TABS_MIN_HEIGHT : STICKY_MIN_HEIGHT,
     title: note.title,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 12 },
+    frame: false,
+    titleBarStyle: "hidden",
+    trafficLightPosition,
     transparent: true,
     backgroundColor: "#00000000",
+    hasShadow: true,
     alwaysOnTop: note.alwaysOnTop,
     icon: ICON_PNG_PATH,
     show: false,
@@ -61,6 +79,8 @@ function createWindow(note, options = {}) {
       sandbox: false,
     },
   });
+  window.setWindowButtonVisibility?.(true);
+  applyWindowChrome(window, isPrimary);
 
   windows.set(window.id, {
     window,
@@ -106,9 +126,28 @@ function createWindow(note, options = {}) {
   return window;
 }
 
+function resolveTrafficLightPosition(isPrimary) {
+  return {
+    x: TRAFFIC_LIGHT_X,
+    y: isPrimary ? TABS_TRAFFIC_LIGHT_Y : STICKY_TRAFFIC_LIGHT_Y,
+  };
+}
+
+function applyTrafficLightPosition(window, isPrimary) {
+  const trafficLightPosition = resolveTrafficLightPosition(Boolean(isPrimary));
+  window.__notepaneTrafficLightPosition = trafficLightPosition;
+  window.setWindowButtonPosition?.(trafficLightPosition);
+  window.setTrafficLightPosition?.(trafficLightPosition);
+}
+
+function applyWindowChrome(window, isPrimary) {
+  window.setHasShadow?.(true);
+  applyTrafficLightPosition(window, isPrimary);
+}
+
 function createNewNoteWindow() {
-  const note = store.createNote(nextWindowBounds());
   const layoutMode = store.getLayoutMode();
+  const note = createNoteForLayoutMode(nextWindowBounds(), layoutMode);
   if (layoutMode === "sticky") {
     return createWindow(note);
   }
@@ -116,6 +155,28 @@ function createNewNoteWindow() {
   const window = ensureTabsWindow(note.id);
   broadcastNotesChanged({ activeNote: note });
   return window;
+}
+
+function createNoteForLayoutMode(bounds, layoutMode = store.getLayoutMode()) {
+  const options = {};
+  if (layoutMode === "sticky") {
+    options.theme = createDefaultStickyTheme(store.listNotes().length);
+  }
+
+  return store.createNote(bounds, options);
+}
+
+function createDefaultStickyTheme(noteIndex = 0) {
+  const accentColor =
+    STICKY_PASTEL_PALETTE[
+      Math.abs(Number.isFinite(noteIndex) ? noteIndex : 0) %
+        STICKY_PASTEL_PALETTE.length
+    ];
+
+  return {
+    tabTextColor: accentColor,
+    tabTextOpacity: 1,
+  };
 }
 
 function showAllNotes() {
@@ -240,6 +301,14 @@ function broadcastLayoutMode(layoutMode) {
   for (const { window } of windows.values()) {
     if (!window.isDestroyed()) {
       window.webContents.send("layout-mode:changed", layoutMode);
+    }
+  }
+}
+
+function broadcastEditorPreferences(editorPreferences) {
+  for (const { window } of windows.values()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send("editor-preferences:changed", editorPreferences);
     }
   }
 }
@@ -396,6 +465,7 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
     for (const entry of windows.values()) {
       entry.primary = false;
       entry.window.setMinimumSize(STICKY_MIN_WIDTH, STICKY_MIN_HEIGHT);
+      applyWindowChrome(entry.window, false);
     }
     for (const note of notes) {
       if (
@@ -425,6 +495,7 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
   for (const entry of [...windows.values()]) {
     if (entry.window.id === primaryId) {
       entry.primary = true;
+      applyWindowChrome(entry.window, true);
       continue;
     }
 
@@ -543,10 +614,6 @@ function buildMenu() {
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
       ],
     },
     {
@@ -652,6 +719,16 @@ function installIpcHandlers() {
     return nextLayoutMode;
   });
 
+  ipcMain.handle("editor-preferences:get", () => {
+    return store.getEditorPreferences();
+  });
+
+  ipcMain.handle("editor-preferences:update", (_event, payload) => {
+    const editorPreferences = store.updateEditorPreferences(payload);
+    broadcastEditorPreferences(editorPreferences);
+    return editorPreferences;
+  });
+
   ipcMain.handle("notes:get", (event, noteId) => {
     const resolvedNoteId = noteId || getNoteIdForWebContents(event.sender);
     return resolvedNoteId ? store.getNote(resolvedNoteId) : null;
@@ -663,8 +740,12 @@ function installIpcHandlers() {
 
   ipcMain.handle("notes:create", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
-    const note = store.createNote(window?.getBounds() ?? nextWindowBounds());
-    if (store.getLayoutMode() === "sticky") {
+    const layoutMode = store.getLayoutMode();
+    const note = createNoteForLayoutMode(
+      window?.getBounds() ?? nextWindowBounds(),
+      layoutMode,
+    );
+    if (layoutMode === "sticky") {
       createWindow(note);
     }
     broadcastNotesChanged({ activeNote: note });
@@ -806,6 +887,8 @@ function installIpcHandlers() {
     const note = store.updateAppearance(resolvedNoteId, {
       title: payload?.title,
       theme: payload?.theme,
+      editorFontScale: payload?.editorFontScale,
+      editorFontFamily: payload?.editorFontFamily,
     });
 
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -873,6 +956,10 @@ function installIpcHandlers() {
     });
   });
 
+  ipcMain.handle("fonts:list", async () => {
+    return await listInstalledFonts();
+  });
+
   ipcMain.handle("window:set-always-on-top", (event, alwaysOnTop) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window) {
@@ -888,6 +975,27 @@ function installIpcHandlers() {
       }
     }
     return Boolean(alwaysOnTop);
+  });
+
+  ipcMain.handle("window:move-by", (event, payload) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || (window.isMovable && !window.isMovable())) {
+      return null;
+    }
+
+    const deltaX = Number(payload?.deltaX);
+    const deltaY = Number(payload?.deltaY);
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+      return window.getBounds();
+    }
+
+    const [x, y] = window.getPosition();
+    window.setPosition(
+      Math.round(x + deltaX),
+      Math.round(y + deltaY),
+      false,
+    );
+    return window.getBounds();
   });
 }
 
@@ -1078,6 +1186,83 @@ function mimeForExtension(extension) {
     default:
       return "image/png";
   }
+}
+
+async function listInstalledFonts() {
+  if (!installedFontsPromise) {
+    installedFontsPromise = resolveInstalledFonts().catch(() => []);
+  }
+
+  return await installedFontsPromise;
+}
+
+async function resolveInstalledFonts() {
+  if (process.platform === "darwin") {
+    const { stdout } = await execFileAsync(
+      "/usr/sbin/system_profiler",
+      ["SPFontsDataType", "-json", "-detailLevel", "mini"],
+      {
+        timeout: 20_000,
+        maxBuffer: 24 * 1024 * 1024,
+      },
+    );
+
+    return extractFontFamiliesFromSystemProfiler(stdout);
+  }
+
+  return [];
+}
+
+function extractFontFamiliesFromSystemProfiler(stdout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+
+  const fontFamilies = new Set();
+  const fontItems = Array.isArray(parsed?.SPFontsDataType)
+    ? parsed.SPFontsDataType
+    : [];
+
+  for (const item of fontItems) {
+    if (item?.enabled === "no" || item?.valid === "no") {
+      continue;
+    }
+
+    const typefaces = Array.isArray(item?.typefaces) ? item.typefaces : [];
+    for (const typeface of typefaces) {
+      if (typeface?.enabled === "no" || typeface?.valid === "no") {
+        continue;
+      }
+
+      const family = normalizeInstalledFontFamily(
+        typeface?.family || typeface?.fullname || typeface?._name,
+      );
+      if (family) {
+        fontFamilies.add(family);
+      }
+    }
+  }
+
+  return [...fontFamilies].sort((left, right) =>
+    left.localeCompare(right, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    }),
+  );
+}
+
+function normalizeInstalledFontFamily(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
 }
 
 function nextWindowBounds() {

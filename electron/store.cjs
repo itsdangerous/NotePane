@@ -14,6 +14,34 @@ const DEFAULT_NOTE_THEME = Object.freeze({
   tabTextOpacity: 1,
 });
 const DEFAULT_THEME = DEFAULT_NOTE_THEME;
+const DEFAULT_EDITOR_FONT_SCALE = 1;
+const MIN_EDITOR_FONT_SCALE = 0.38;
+const MAX_EDITOR_FONT_SCALE = 9;
+const DEFAULT_EDITOR_FONT_FAMILY = "system";
+const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
+  editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
+  editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+});
+const LOCAL_FONT_VALUE_PREFIX = "local:";
+const EDITOR_FONT_FAMILIES = new Set([
+  "system",
+  "inter",
+  "sf-pro",
+  "avenir",
+  "helvetica",
+  "arial",
+  "verdana",
+  "trebuchet",
+  "serif",
+  "mono",
+  "rounded",
+  "georgia",
+  "palatino",
+  "garamond",
+  "times",
+  "menlo",
+  "courier",
+]);
 
 class StickyStore {
   constructor(userDataPath) {
@@ -22,6 +50,7 @@ class StickyStore {
     this.state = {
       appTheme: DEFAULT_APP_THEME,
       layoutMode: DEFAULT_LAYOUT_MODE,
+      editorPreferences: DEFAULT_EDITOR_PREFERENCES,
       notes: [],
     };
     this.load();
@@ -32,6 +61,7 @@ class StickyStore {
       this.state = {
         appTheme: DEFAULT_APP_THEME,
         layoutMode: DEFAULT_LAYOUT_MODE,
+        editorPreferences: DEFAULT_EDITOR_PREFERENCES,
         notes: [],
       };
       return;
@@ -46,6 +76,9 @@ class StickyStore {
         ? parsedObject.version
         : 1;
       const resetLegacyAlwaysOnTop = version < 3;
+      const editorPreferences = normalizeEditorPreferences(
+        parsedObject.editorPreferences,
+      );
       this.state = {
         appTheme: normalizeAppTheme(
           Array.isArray(parsed)
@@ -53,8 +86,9 @@ class StickyStore {
             : parsedObject.appTheme ?? inferLegacyAppTheme(rawNotes),
         ),
         layoutMode: normalizeLayoutMode(parsedObject.layoutMode),
+        editorPreferences,
         notes: rawNotes.map((note) =>
-          normalizeNote(note, { resetLegacyAlwaysOnTop }),
+          normalizeNote(note, { resetLegacyAlwaysOnTop, editorPreferences }),
         ),
       };
     } catch (error) {
@@ -62,6 +96,7 @@ class StickyStore {
       this.state = {
         appTheme: DEFAULT_APP_THEME,
         layoutMode: DEFAULT_LAYOUT_MODE,
+        editorPreferences: DEFAULT_EDITOR_PREFERENCES,
         notes: [],
       };
       console.error("[NotePane] Failed to load notes.json:", error);
@@ -88,6 +123,19 @@ class StickyStore {
     return this.getLayoutMode();
   }
 
+  getEditorPreferences() {
+    return { ...this.state.editorPreferences };
+  }
+
+  updateEditorPreferences(editorPreferences) {
+    this.state.editorPreferences = normalizeEditorPreferences(
+      editorPreferences,
+      this.state.editorPreferences,
+    );
+    this.save();
+    return this.getEditorPreferences();
+  }
+
   listNotes() {
     return [...this.state.notes].sort((a, b) => a.createdAt - b.createdAt);
   }
@@ -99,16 +147,23 @@ class StickyStore {
   createNote(bounds, options = {}) {
     const now = Date.now();
     const seedDemoContent = Boolean(options?.seedDemoContent);
+    const editorPreferences = this.getEditorPreferences();
     const note = normalizeNote({
       id: randomUUID(),
       title: DEFAULT_NOTE_TITLE,
       blocksJSON: null,
       markdown: "",
       bounds,
-      theme: DEFAULT_NOTE_THEME,
+      theme: options?.theme ?? DEFAULT_NOTE_THEME,
       alwaysOnTop: false,
       detached: false,
       seedDemoContent,
+      editorFontScale: Object.hasOwn(options, "editorFontScale")
+        ? options.editorFontScale
+        : editorPreferences.editorFontScale,
+      editorFontFamily: Object.hasOwn(options, "editorFontFamily")
+        ? options.editorFontFamily
+        : editorPreferences.editorFontFamily,
       createdAt: now,
       updatedAt: now,
     });
@@ -157,6 +212,20 @@ class StickyStore {
 
     if (Object.hasOwn(appearance ?? {}, "theme")) {
       note.theme = normalizeTheme(appearance.theme, note.theme);
+    }
+
+    if (Object.hasOwn(appearance ?? {}, "editorFontScale")) {
+      note.editorFontScale = normalizeEditorFontScale(
+        appearance.editorFontScale,
+        note.editorFontScale,
+      );
+    }
+
+    if (Object.hasOwn(appearance ?? {}, "editorFontFamily")) {
+      note.editorFontFamily = normalizeEditorFontFamily(
+        appearance.editorFontFamily,
+        note.editorFontFamily,
+      );
     }
 
     note.updatedAt = Date.now();
@@ -224,6 +293,7 @@ class StickyStore {
           version: 3,
           appTheme: this.state.appTheme,
           layoutMode: this.state.layoutMode,
+          editorPreferences: this.state.editorPreferences,
           notes: this.state.notes,
         },
         null,
@@ -256,6 +326,7 @@ function normalizeNote(value, options = {}) {
   const now = Date.now();
   const source = value && typeof value === "object" ? value : {};
   const resetLegacyAlwaysOnTop = Boolean(options.resetLegacyAlwaysOnTop);
+  const editorPreferences = normalizeEditorPreferences(options.editorPreferences);
   return {
     id: typeof source.id === "string" && source.id ? source.id : randomUUID(),
     title: normalizeTitle(source.title),
@@ -275,6 +346,14 @@ function normalizeNote(value, options = {}) {
     seedDemoContent: typeof source.seedDemoContent === "boolean"
       ? source.seedDemoContent
       : false,
+    editorFontScale: normalizeEditorFontScale(
+      source.editorFontScale,
+      editorPreferences.editorFontScale,
+    ),
+    editorFontFamily: normalizeEditorFontFamily(
+      source.editorFontFamily,
+      editorPreferences.editorFontFamily,
+    ),
     createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
     updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : now,
   };
@@ -320,6 +399,27 @@ function normalizeLayoutMode(value, fallback = DEFAULT_LAYOUT_MODE) {
   }
 
   return fallback === "sticky" ? "sticky" : "tabs";
+}
+
+function normalizeEditorPreferences(
+  value,
+  fallback = DEFAULT_EDITOR_PREFERENCES,
+) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object"
+    ? fallback
+    : DEFAULT_EDITOR_PREFERENCES;
+
+  return {
+    editorFontScale: normalizeEditorFontScale(
+      source.editorFontScale,
+      fallbackSource.editorFontScale,
+    ),
+    editorFontFamily: normalizeEditorFontFamily(
+      source.editorFontFamily,
+      fallbackSource.editorFontFamily,
+    ),
+  };
 }
 
 function normalizeTheme(value, fallback = DEFAULT_NOTE_THEME) {
@@ -369,6 +469,62 @@ function normalizeOpacity(value, fallback = DEFAULT_NOTE_THEME.tabTextOpacity) {
     : DEFAULT_NOTE_THEME.tabTextOpacity;
 }
 
+function normalizeEditorFontScale(value, fallback = DEFAULT_EDITOR_FONT_SCALE) {
+  const numericValue = Number(value);
+  const fallbackValue = Number(fallback);
+  const resolvedValue = Number.isFinite(numericValue)
+    ? numericValue
+    : Number.isFinite(fallbackValue)
+      ? fallbackValue
+      : DEFAULT_EDITOR_FONT_SCALE;
+
+  return Math.round(
+    clamp(resolvedValue, MIN_EDITOR_FONT_SCALE, MAX_EDITOR_FONT_SCALE) * 100,
+  ) / 100;
+}
+
+function normalizeEditorFontFamily(value, fallback = DEFAULT_EDITOR_FONT_FAMILY) {
+  const normalizedValue = normalizeEditorFontFamilyValue(value);
+  if (isAllowedEditorFontFamily(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const normalizedFallback = normalizeEditorFontFamilyValue(fallback);
+  return isAllowedEditorFontFamily(normalizedFallback)
+    ? normalizedFallback
+    : DEFAULT_EDITOR_FONT_FAMILY;
+}
+
+function normalizeEditorFontFamilyValue(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmedValue = value.replace(/\s+/g, " ").trim();
+  if (trimmedValue.toLowerCase().startsWith(LOCAL_FONT_VALUE_PREFIX)) {
+    const family = trimmedValue
+      .slice(LOCAL_FONT_VALUE_PREFIX.length)
+      .replace(/["\\]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    return family ? `${LOCAL_FONT_VALUE_PREFIX}${family}` : "";
+  }
+
+  return trimmedValue.toLowerCase();
+}
+
+function isAllowedEditorFontFamily(value) {
+  return (
+    EDITOR_FONT_FAMILIES.has(value) ||
+    (
+      typeof value === "string" &&
+      value.startsWith(LOCAL_FONT_VALUE_PREFIX) &&
+      value.length > LOCAL_FONT_VALUE_PREFIX.length
+    )
+  );
+}
+
 function normalizeBlocksJSON(value) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
@@ -411,4 +567,6 @@ module.exports = {
   DEFAULT_LAYOUT_MODE,
   DEFAULT_NOTE_THEME,
   DEFAULT_THEME,
+  DEFAULT_EDITOR_FONT_SCALE,
+  DEFAULT_EDITOR_FONT_FAMILY,
 };

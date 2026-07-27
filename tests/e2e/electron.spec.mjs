@@ -23,25 +23,25 @@ test("Electron app opens a sticky window and persists editor content", async () 
     await page.keyboard.press("Enter");
     await page.getByRole("switch", { name: "Theme mode" }).click();
     await clickMenuItem(electronApp, "Preferences");
-    await expect(page.getByRole("dialog", { name: "Preferences panel" }))
+    await expect(page.getByRole("dialog", { name: "Preferences window" }))
       .toBeVisible();
-    await page.getByLabel("RGB tab text color value").fill("rgb(255 255 255)");
+    await page.getByLabel("RGB session tab color value").fill("rgb(255 255 255)");
     await page.getByRole("button", { name: "Close preferences" }).click();
-    await expect(page.getByRole("dialog", { name: "Preferences panel" }))
+    await expect(page.getByRole("dialog", { name: "Preferences window" }))
       .toHaveCount(0);
     await page.addStyleTag({
       content: ".bn-editor { padding-bottom: 1400px !important; }",
     });
     await page.getByRole("paragraph").filter({ hasText: /^$/ }).last().click();
     await page.keyboard.insertText("electron persistence probe");
-    await page.getByRole("button", { name: "Export note" }).click();
+    await page.keyboard.press(modifierShortcut("Shift+E"));
     await page.getByRole("menuitem", { name: "Export as PNG" }).click();
     await expect.poll(
       () => fs.existsSync(path.join(exportDirectory, "Project note.png")),
       { timeout: 20_000 },
     )
       .toBe(true);
-    await page.getByRole("button", { name: "Export note" }).click();
+    await page.keyboard.press(modifierShortcut("Shift+E"));
     await page.getByRole("menuitem", { name: "Export as PDF" }).click();
     await page.waitForTimeout(800);
 
@@ -173,6 +173,196 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
   }
 });
 
+test("Electron creates sticky-mode tabs with a persisted default accent", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(1);
+
+    await clickMenuItem(electronApp, "New Tab");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    await expect.poll(() => {
+      const state = JSON.parse(
+        fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+      );
+      return state.notes.map((note) => note.theme);
+    }).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tabTextColor: "#ffd7e8",
+          tabTextOpacity: 1,
+        }),
+      ]),
+    );
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(1);
+
+    const tabsPage = getOpenPages(electronApp)[0] ?? await electronApp.firstWindow();
+    await expect(tabsPage.getByRole("tab")).toHaveCount(2);
+    await expect.poll(async () => {
+      return await tabsPage.evaluate(() => {
+        const tab = [...document.querySelectorAll(".session-tab-row")]
+          .find((candidate) =>
+            candidate.getAttribute("style")?.includes("rgb(255 215 232 / 1)"),
+          );
+        return tab
+          ? {
+              background: getComputedStyle(tab).backgroundColor,
+              color: getComputedStyle(tab).color,
+              boxShadow: getComputedStyle(tab).boxShadow,
+            }
+          : null;
+      });
+    }).toEqual({
+      background: "rgb(255, 215, 232)",
+      color: "rgba(31, 31, 31, 0.72)",
+      boxShadow: "rgba(31, 31, 31, 0.04) 0px 0px 0px 1px inset",
+    });
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron exposes installed font families to the renderer", async () => {
+  test.skip(process.platform !== "darwin", "Installed font enumeration currently uses macOS system_profiler.");
+
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+
+    await expect.poll(async () => {
+      const currentPage = getOpenPages(electronApp)[0];
+      if (!currentPage) {
+        return 0;
+      }
+
+      try {
+        return await currentPage.evaluate(async () => {
+          const fonts = await window.blocknoteSticky?.listFonts?.();
+          return Array.isArray(fonts) ? fonts.length : 0;
+        });
+      } catch {
+        return 0;
+      }
+    }, { timeout: 25_000 }).toBeGreaterThan(0);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron vertically centers macOS traffic lights for tabs and sticky windows", async () => {
+  test.skip(process.platform !== "darwin", "macOS traffic lights are only available on darwin.");
+
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "first-note",
+      title: "First note",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "second-note",
+      title: "Second note",
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]);
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-header")).toBeVisible();
+
+    await expect.poll(async () => {
+      return await getWindowButtonPosition(electronApp, 0);
+    }).toEqual({ x: 14, y: 15 });
+    await expect.poll(async () => {
+      return await getAllWindowShadowStates(electronApp);
+    }).toEqual([true]);
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    await expect.poll(async () => {
+      return await getAllWindowButtonPositions(electronApp);
+    }).toEqual([
+      { x: 14, y: 10 },
+      { x: 14, y: 10 },
+    ]);
+    await expect.poll(async () => {
+      return await getAllWindowShadowStates(electronApp);
+    }).toEqual([true, true]);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+async function getWindowButtonPosition(electronApp, windowIndex) {
+  return await electronApp.evaluate(({ BrowserWindow }, index) => {
+    const window = BrowserWindow.getAllWindows()[index];
+    return window?.getWindowButtonPosition?.()
+      ?? window?.getTrafficLightPosition?.()
+      ?? window?.__notepaneTrafficLightPosition
+      ?? null;
+  }, windowIndex);
+}
+
+async function getAllWindowButtonPositions(electronApp) {
+  return await electronApp.evaluate(({ BrowserWindow }) => {
+    return BrowserWindow.getAllWindows().map((window) =>
+      window?.getWindowButtonPosition?.()
+        ?? window?.getTrafficLightPosition?.()
+        ?? window?.__notepaneTrafficLightPosition
+        ?? null
+    );
+  });
+}
+
+async function getAllWindowShadowStates(electronApp) {
+  return await electronApp.evaluate(({ BrowserWindow }) => {
+    return BrowserWindow.getAllWindows().map((window) => window?.hasShadow?.() ?? null);
+  });
+}
+
+async function getFirstWindowBounds(electronApp) {
+  return await electronApp.evaluate(({ BrowserWindow }) => {
+    return BrowserWindow.getAllWindows()[0]?.getBounds() ?? null;
+  });
+}
+
 test("Electron returns to tab session mode after every sticky window is closed", async () => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "notepane-electron-"),
@@ -250,7 +440,7 @@ test("Electron returns to tab session mode after every sticky window is closed",
   }
 });
 
-test("Electron sticky windows keep independent title and color updates", async () => {
+test("Electron sticky windows keep independent pin and color updates", async () => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "notepane-electron-"),
   );
@@ -290,12 +480,18 @@ test("Electron sticky windows keep independent title and color updates", async (
       });
     }).toBe(2);
 
-    const firstStickyPage = await getStickyPageByTitle(electronApp, "First note");
-    const secondStickyPage = await getStickyPageByTitle(electronApp, "Second note");
+    const firstStickyPage = await getStickyPageByNoteId(electronApp, "first-note");
+    const secondStickyPage = await getStickyPageByNoteId(electronApp, "second-note");
+    await expect(firstStickyPage.getByTestId("sticky-title-drag-label"))
+      .toHaveCount(0);
+    await expect(secondStickyPage.getByTestId("sticky-title-drag-label"))
+      .toHaveCount(0);
 
+    await activateStickyEditorToolbar(firstStickyPage);
     await firstStickyPage.getByRole("button", { name: "Pin window" }).click();
     await expect(firstStickyPage.getByRole("button", { name: "Unpin window" }))
       .toHaveAttribute("aria-pressed", "true");
+    await activateStickyEditorToolbar(secondStickyPage);
     await expect(secondStickyPage.getByRole("button", { name: "Pin window" }))
       .toHaveAttribute("aria-pressed", "false");
     await expect.poll(async () => {
@@ -338,21 +534,59 @@ test("Electron sticky windows keep independent title and color updates", async (
       ]),
     );
 
-    await firstStickyPage.getByLabel("Note title").fill("Changed first");
+    await activateStickyEditorToolbar(firstStickyPage);
     await firstStickyPage.getByRole("button", { name: "Sticky color" }).click();
     await firstStickyPage.getByRole("button", { name: "Pastel color 5" }).click();
     await expect(firstStickyPage.getByLabel("HEX sticky color value"))
       .toHaveValue("eadcff");
     await firstStickyPage.waitForTimeout(450);
 
-    await expect(firstStickyPage.getByLabel("Note title"))
-      .toHaveValue("Changed first");
-    await expect(secondStickyPage.getByLabel("Note title"))
-      .toHaveValue("Second note");
     await expect.poll(() => getShellBackground(firstStickyPage))
       .toBe("rgb(234, 220, 255)");
     await expect.poll(() => getShellBackground(secondStickyPage))
       .not.toBe("rgb(234, 220, 255)");
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron moves a sticky window when dragging its header", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+      "data-layout-mode",
+      "sticky",
+    );
+
+    const header = page.getByTestId("sticky-header");
+    await expect(header).toBeVisible();
+
+    const beforeBounds = await getFirstWindowBounds(electronApp);
+    const headerBox = await header.boundingBox();
+    await page.mouse.move(headerBox.x + headerBox.width - 84, headerBox.y + headerBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      headerBox.x + headerBox.width - 12,
+      headerBox.y + headerBox.height / 2 + 36,
+      { steps: 6 },
+    );
+    await page.mouse.up();
+
+    await expect.poll(async () => {
+      const nextBounds = await getFirstWindowBounds(electronApp);
+      return (
+        nextBounds.x - beforeBounds.x >= 40 &&
+        nextBounds.y - beforeBounds.y >= 20
+      );
+    }).toBe(true);
   } finally {
     await electronApp.close();
   }
@@ -420,26 +654,53 @@ function readPngDimensions(filePath) {
   };
 }
 
-async function getStickyPageByTitle(electronApp, title) {
+async function getStickyPageByNoteId(electronApp, noteId) {
   await expect.poll(async () => {
-    const pages = electronApp.windows();
-    const titles = await Promise.all(
-      pages.map(async (page) => {
-        const input = page.getByLabel("Note title");
-        return await input.count() > 0 ? input.inputValue() : null;
-      }),
+    const pages = getOpenPages(electronApp);
+    const noteIds = await Promise.all(
+      pages.map((page) => getPageNoteId(page)),
     );
-    return titles.includes(title);
+    return noteIds.includes(noteId);
   }).toBe(true);
 
-  for (const page of electronApp.windows()) {
-    const input = page.getByLabel("Note title");
-    if (await input.count() > 0 && await input.inputValue() === title) {
+  for (const page of getOpenPages(electronApp)) {
+    if (await getPageNoteId(page) === noteId) {
       return page;
     }
   }
 
-  throw new Error(`Sticky page not found: ${title}`);
+  throw new Error(`Sticky page not found: ${noteId}`);
+}
+
+function getOpenPages(electronApp) {
+  return electronApp.windows().filter((page) => !page.isClosed());
+}
+
+async function activateStickyEditorToolbar(page) {
+  await page.bringToFront();
+  await page.getByTestId("sticky-editor-surface").click({
+    position: {
+      x: 120,
+      y: 72,
+    },
+  });
+  const toolbar = page.getByRole("group", { name: "Editor typography" });
+  if (await toolbar.count() === 0) {
+    await page.getByRole("button", { name: "Show editor tools" }).click();
+  }
+  await expect(toolbar).toBeVisible();
+}
+
+async function getPageNoteId(page) {
+  if (!page || page.isClosed()) {
+    return null;
+  }
+
+  try {
+    return new URL(page.url()).searchParams.get("noteId");
+  } catch {
+    return null;
+  }
 }
 
 async function getShellBackground(page) {
@@ -473,4 +734,8 @@ async function clickMenuItem(electronApp, label) {
       return null;
     }
   }, label);
+}
+
+function modifierShortcut(key) {
+  return `${process.platform === "darwin" ? "Meta" : "Control"}+${key}`;
 }

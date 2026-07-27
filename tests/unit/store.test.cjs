@@ -48,6 +48,29 @@ test("creates, saves, and reloads a local note", () => {
   assert.equal(reloaded.seedDemoContent, false);
 });
 
+test("creates a note with an optional initial theme", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+  const note = store.createNote(
+    { width: 900, height: 700 },
+    {
+      theme: {
+        tabTextColor: "#ffd7e8",
+        tabTextOpacity: 1,
+      },
+    },
+  );
+
+  assert.deepEqual(note.theme, {
+    tabTextColor: "#ffd7e8",
+    tabTextOpacity: 1,
+  });
+  assert.deepEqual(new StickyStore(directory).getNote(note.id).theme, {
+    tabTextColor: "#ffd7e8",
+    tabTextOpacity: 1,
+  });
+});
+
 test("marks only explicitly seeded notes for demo content", () => {
   const directory = createTemporaryDirectory();
   const store = new StickyStore(directory);
@@ -153,6 +176,62 @@ test("detaches and reattaches notes for tab/window workflows", () => {
   assert.equal(store.setDetached(note.id, false).detached, false);
 });
 
+test("updates and persists editor typography per note", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+  const firstNote = store.createNote({ width: 900, height: 700 });
+  const secondNote = store.createNote({ width: 900, height: 700 });
+
+  assert.equal(firstNote.editorFontScale, 1);
+  assert.equal(secondNote.editorFontScale, 1);
+  assert.equal(firstNote.editorFontFamily, "system");
+  assert.equal(secondNote.editorFontFamily, "system");
+
+  store.updateAppearance(firstNote.id, {
+    editorFontScale: 9,
+    editorFontFamily: "local:Pretendard",
+  });
+  store.updateAppearance(secondNote.id, {
+    editorFontScale: 0.38,
+    editorFontFamily: "garamond",
+  });
+
+  const reloadedStore = new StickyStore(directory);
+
+  assert.equal(reloadedStore.getNote(firstNote.id).editorFontScale, 9);
+  assert.equal(reloadedStore.getNote(secondNote.id).editorFontScale, 0.38);
+  assert.equal(reloadedStore.getNote(firstNote.id).editorFontFamily, "local:Pretendard");
+  assert.equal(reloadedStore.getNote(secondNote.id).editorFontFamily, "garamond");
+});
+
+test("updates editor preferences and applies them to new notes", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+
+  assert.deepEqual(store.getEditorPreferences(), {
+    editorFontScale: 1,
+    editorFontFamily: "system",
+  });
+
+  assert.deepEqual(store.updateEditorPreferences({
+    editorFontScale: 1.5,
+    editorFontFamily: "local:Pretendard",
+  }), {
+    editorFontScale: 1.5,
+    editorFontFamily: "local:Pretendard",
+  });
+
+  const note = store.createNote({ width: 900, height: 700 });
+  assert.equal(note.editorFontScale, 1.5);
+  assert.equal(note.editorFontFamily, "local:Pretendard");
+
+  const reloadedStore = new StickyStore(directory);
+  assert.deepEqual(reloadedStore.getEditorPreferences(), {
+    editorFontScale: 1.5,
+    editorFontFamily: "local:Pretendard",
+  });
+});
+
 test("migrates legacy always-on-top default to false", () => {
   const directory = createTemporaryDirectory();
   fs.mkdirSync(directory, { recursive: true });
@@ -182,7 +261,7 @@ test("migrates legacy always-on-top default to false", () => {
   assert.equal(store.getNote("legacy-note").alwaysOnTop, false);
 });
 
-test("migrates legacy note text color to sidebar tab text only", () => {
+test("migrates legacy note text color to sidebar tab accent only", () => {
   const directory = createTemporaryDirectory();
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(

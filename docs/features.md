@@ -20,13 +20,14 @@
 - Compact Sticky mode header without the Light/Dark switch
 - Direct Sun/Moon switch for global Notion-style Light/Dark app theme
 - Preferences panel via macOS app menu or `Command + ,`
-- Sidebar tab text color customization
+- Default editor font family and font size customization for newly created sessions
+- Sidebar tab background/accent color customization with automatic contrast text
 - Tab color wheel
 - Color brightness/value slider that is preserved when the wheel color changes
-- Color opacity slider for sidebar tab text
-- Eyedropper for tab text color when the runtime supports the browser `EyeDropper` API
-- Editable HEX/HSL/RGB/LCH tab text color values
-- Copy buttons for HEX/HSL/RGB/LCH tab text color values
+- Color opacity slider for the sidebar tab accent
+- Eyedropper for session tab color when the runtime supports the browser `EyeDropper` API
+- Editable HEX/HSL/RGB/LCH session tab color values
+- Copy buttons for HEX/HSL/RGB/LCH session tab color values
 - New note/session: `Command + T` or `Command + N`
 - New sidebar session: dashed `+` button directly under the last session tab
 - Switch sidebar sessions: `Command + 1` through `Command + 9` on macOS
@@ -60,6 +61,7 @@ BlockNote handles editor interaction directly.
 - Table handles
 - `Command + A` selects all editor blocks
 - `Command + X` cuts/removes the current block when no text is selected
+- Active editor-only typography control with searchable font family dropdown, installed macOS font discovery, and 6-144px size presets/manual input
 
 ## Blocks
 
@@ -97,6 +99,9 @@ Stored fields:
 - note title
 - app-wide theme mode: `appTheme.mode`, either `light` or `dark`
 - app-wide layout mode: `layoutMode`, either `tabs` or `sticky`
-- optional sidebar tab text color
-- optional sidebar tab text opacity
+- app-wide editor defaults: default font size scale and default font family
+- optional sidebar tab accent color
+- optional sidebar tab accent opacity
+- per-note editor font size scale
+- per-note editor font family
 - timestamps

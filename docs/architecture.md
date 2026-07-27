@@ -28,9 +28,18 @@ The renderer owns editor behavior. The desktop shell does not override BlockNote
 4. IPC sends the payload to Electron main.
 5. `StickyStore` writes `notes.json` atomically.
 
-Appearance changes use a separate IPC path and persist the note title plus optional sidebar tab text color and opacity in the
-matching local JSON note record. Light/Dark mode is app-wide state and is persisted separately at the root of
-`notes.json` as `appTheme.mode`. Layout mode is also app-wide and is stored as root `layoutMode`.
+Appearance changes use a separate IPC path and persist the note title, optional sidebar tab accent color/opacity, and
+per-note editor typography in the matching local JSON note record. Light/Dark mode is app-wide state and is persisted
+separately at the root of `notes.json` as `appTheme.mode`. Layout mode is also app-wide and is stored as root
+`layoutMode`.
+
+The renderer keeps a built-in font list for browser preview mode. In Electron, the preload bridge exposes `fonts:list`;
+the main process reads macOS installed font families through `system_profiler SPFontsDataType`, caches the result, and
+returns family names only. Installed fonts are stored as `local:<font family>` so the setting can survive app restart
+without copying font files into the app.
+
+Editor defaults are app-wide preferences stored at `editorPreferences` in `notes.json`. New sessions copy those defaults
+into their own per-note typography fields at creation time; changing defaults does not mutate existing sessions.
 
 Sidebar session changes use note list/create/activate/delete/detach/attach IPC calls. Activating a session changes the note bound to
 the current window, then remounts the BlockNote editor with that note's stored document. Deleting the active session
@@ -95,22 +104,23 @@ authored inline colors.
 Light/Dark mode is global for the whole app. Switching sidebar sessions or opening another sticky window does not
 change the mode; all windows receive the same app theme via Electron IPC.
 
-Session tab backgrounds are not customizable. They are derived only from the current Light/Dark mode and whether the
-session is active or inactive.
+Session tab backgrounds can use each session's accent color. Active, inactive, and hover backgrounds are derived from
+that accent plus the current Light/Dark mode. The title text color is calculated from the effective background so the
+tab remains readable in both modes.
 
 The Light/Dark switch is shown directly in the Tab session mode header and does not require opening Preferences.
 Sticky mode hides this switch to keep each sticky window compact; the app-wide shortcut/menu state still remains global.
 
-The Preferences panel is opened from the macOS app menu or `Command + ,` and is only for sidebar tab text styling:
+The Preferences panel is opened from the macOS app menu or `Command + ,` and is only for sidebar tab accent styling:
 
 - circular hue/saturation wheel
 - brightness/value slider that remains unchanged when hue/saturation changes
-- opacity slider for the sidebar tab text alpha channel
+- opacity slider for the sidebar tab accent alpha channel
 - eyedropper integration through the browser `EyeDropper` API when available
 - editable HEX/HSL/RGB/LCH fields
 - HEX/HSL/RGB/LCH copy buttons
 
-The selected or typed color is parsed back into the active session's `theme.tabTextColor`.
+The selected or typed accent color is parsed back into the active session's `theme.tabTextColor`.
 The opacity slider is parsed back into the active session's `theme.tabTextOpacity`.
 Sticky-mode header color controls use the same fields for the sticky background, so returning to Tab session mode
 keeps the selected color/opacity on that session tab.
@@ -124,7 +134,8 @@ Sticky styling is applied outside the BlockNote editor:
 - `.sticky-header` contains the sidebar toggle or title, drag strip, layout switch, and export controls.
 - Sticky mode uses a shorter header and hides the Light/Dark switch.
 - The sticky header exposes a color button for sticky background color/opacity.
-- The Preferences panel contains only sidebar tab text color/opacity settings in Tab session mode.
+- Sticky mode calculates text, border, code, and table colors from the current sticky background to keep contrast readable.
+- The Preferences panel contains only sidebar tab accent color/opacity settings in Tab session mode.
 - The export control uses a share-style icon and opens PNG/PDF choices.
 - `.sticky-header` is the only drag region.
 - `.sticky-editor-surface` is explicitly `no-drag`.

@@ -7,7 +7,7 @@
 - Sticky mode: each session opens as an individual sticky window
 - Switching into Sticky mode arranges sessions as compact sticky-note windows
 - Closing an individual sticky window keeps it closed until Show All NotePanes or another Sticky-mode entry
-- Sticky mode windows have per-session pastel color and opacity controls in the header
+- Sticky mode windows have per-session pastel color, opacity, pinning, layout, and editor controls in a header settings modal
 - Sticky color/opacity carries back to the sidebar session tab color when returning to Tab session mode
 - Drag a session tab outside the sidebar to detach it into a separate window
 - Dock a detached sticky window back into tab sessions
@@ -16,11 +16,10 @@
 - Editable title in sticky mode header
 - Session rename by double-clicking a sidebar tab
 - Hover-only session delete button in the sidebar tab row
-- Header-right Light/Dark switch in Tab session mode
-- Compact Sticky mode header without the Light/Dark switch
-- Direct Sun/Moon switch for global Notion-style Light/Dark app theme
-- Preferences panel via macOS app menu or `Command + ,`
+- Global Notion-style Light/Dark app theme via sidebar Preferences or shortcut
+- Preferences panel via sidebar footer button, macOS app menu, or `Command + ,`
 - Default editor font family and font size customization for newly created sessions
+- Right-click session tab context menu for per-session tab color
 - Sidebar tab background/accent color customization with automatic contrast text
 - Tab color wheel
 - Color brightness/value slider that is preserved when the wheel color changes

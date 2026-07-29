@@ -31,16 +31,36 @@ test("keeps sticky chrome outside the editable BlockNote surface", async ({ page
   await expect(page.getByRole("tablist", { name: "Note sessions" })).toBeVisible();
   await expect(page.getByLabel("Session name")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Theme" })).toHaveCount(0);
-  await expect(page.getByRole("switch", { name: "Theme mode" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
   await expect(page.getByTestId("session-sidebar-footer")).toBeVisible();
+  await expect(page.getByTestId("session-sidebar-footer").getByRole("button", { name: "Export PDF" }))
+    .toBeVisible();
   await expect(page.getByTestId("session-sidebar-footer").getByRole("button", { name: "Preferences" }))
     .toBeVisible();
-  await expect(page.getByTestId("session-sidebar-footer").getByRole("button", { name: "Layout mode" }))
+  await expect(page.getByTestId("session-sidebar-footer").getByRole("button", { name: "Trash" }))
+    .toBeVisible();
+  await expect(page.getByTestId("session-sidebar-footer").locator(".notepane-icon-export"))
+    .toHaveClass(/lucide-file-down/);
+  await expect(page.getByTestId("session-sidebar-footer").locator(".notepane-icon-settings"))
+    .toHaveClass(/lucide-cog/);
+  await expect(page.getByTestId("session-sidebar-footer").locator(".notepane-icon-trash"))
+    .toHaveClass(/lucide-trash-2/);
+  await page.getByTestId("session-sidebar-footer")
+    .getByRole("button", { name: "Trash" })
+    .click();
+  const trashPreferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(trashPreferencesPanel).toBeVisible();
+  await expect(trashPreferencesPanel.getByRole("tab", { name: "Trash" }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(trashPreferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await trashPreferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+  await expect(trashPreferencesPanel).toHaveCount(0);
+  await expect(page.getByTestId("session-sidebar-footer").getByRole("button", { name: "Switch to Sticky windows mode" }))
     .toBeVisible();
   await expect(page.getByRole("slider", { name: "Theme color" })).toHaveCount(0);
   await expect(page.getByLabel("Background transparency")).toHaveCount(0);
   await expect(page.getByRole("slider", { name: "Color opacity" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Export note" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Export PDF" })).toBeVisible();
   await expect(page.locator("[aria-label='NotePane wordmark']")).toBeVisible();
   await expect(page.getByTestId("session-sidebar").locator("[aria-label='NotePane wordmark']"))
     .toBeVisible();
@@ -57,7 +77,7 @@ test("keeps sticky chrome outside the editable BlockNote surface", async ({ page
   await expect(page.locator(".sticky-grip")).toHaveCount(0);
 
   await clickLastEmptyParagraph(page);
-  await expect(page.getByRole("button", { name: "Export note" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Export PDF" })).toBeVisible();
 
   const dragRegions = await page.evaluate(() => {
     const header = document.querySelector("[data-testid='sticky-header']");
@@ -114,9 +134,9 @@ test("keeps sticky chrome outside the editable BlockNote surface", async ({ page
   expect(dragRegions.sidebarAnimationName).toBe("none");
   expect(dragRegions.stickyBodyAnimationName).toBe("none");
   expect(dragRegions.toggle).toBe("no-drag");
-  expect(dragRegions.toggleBackground).toBe("rgba(0, 0, 0, 0)");
-  expect(dragRegions.toggleBorderStyle).toBe("none");
-  expect(dragRegions.toggleBoxShadow).toBe("none");
+  expect(dragRegions.toggleBackground).not.toBe("rgba(0, 0, 0, 0)");
+  expect(dragRegions.toggleBorderStyle).toBe("solid");
+  expect(dragRegions.toggleBoxShadow).not.toBe("none");
   expect(dragRegions.toggleCenterDelta).toBeLessThanOrEqual(1);
   expect(dragRegions.actions).toBe("no-drag");
   expect(dragRegions.editorScrollbarColor).toBe("rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)");
@@ -129,20 +149,32 @@ test("keeps sticky chrome outside the editable BlockNote surface", async ({ page
 
 test("keeps light/dark mode global across sidebar sessions", async ({ page }) => {
   await clickLastEmptyParagraph(page);
-  const modeSwitch = page.getByRole("switch", { name: "Theme mode" });
   const lightIconColors = await getActionIconColors(page);
+  expectDistinctIconColors(lightIconColors);
   await expectSystemSymbolIcons(page);
+  await expect(page.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
 
-  await expectThemeSwitchThumbCentered(page, "light");
-
-  await modeSwitch.click();
+  await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "true");
-  await expectThemeSwitchThumbCentered(page, "dark");
   await clickLastEmptyParagraph(page);
+  await expect.poll(async () => {
+    const darkIconColors = await getActionIconColors(page);
+    return {
+      changed: Object.keys(lightIconColors).every(
+        (key) => darkIconColors[key] !== lightIconColors[key],
+      ),
+      distinct: new Set(Object.values(darkIconColors)).size,
+    };
+  }).toEqual({
+    changed: true,
+    distinct: Object.keys(lightIconColors).length,
+  });
   const darkIconColors = await getActionIconColors(page);
+  expectDistinctIconColors(darkIconColors);
   expect(darkIconColors.layout).not.toBe(lightIconColors.layout);
   expect(darkIconColors.sidebar).not.toBe(lightIconColors.sidebar);
+  expect(darkIconColors.export).not.toBe(lightIconColors.export);
+  expect(darkIconColors.trash).not.toBe(lightIconColors.trash);
   await expect.poll(async () => {
     return await page.evaluate(() => ({
       bodyThemeMode: document.body.dataset.themeMode,
@@ -164,17 +196,13 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "true");
 
   await page.getByRole("tab").first().click();
   await expect(page.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "true");
 
-  await modeSwitch.click();
+  await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "light");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "false");
-  await expectThemeSwitchThumbCentered(page, "light");
   await expect.poll(async () => {
     return await page.evaluate(() => ({
       bodyThemeMode: document.body.dataset.themeMode,
@@ -193,7 +221,7 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
   });
 });
 
-test("changes only the active editor typography", async ({ page }) => {
+test("changes editor font size globally with shortcuts", async ({ page }) => {
   const before = await getEditorScaleMetrics(page);
 
   await expect(page.getByRole("group", { name: "Editor typography" }))
@@ -201,81 +229,23 @@ test("changes only the active editor typography", async ({ page }) => {
 
   await page.keyboard.press(modifierShortcut("+"));
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1",
-    shellFontSize: before.shellFontSize,
-    headerHeight: before.headerHeight,
-    sidebarWidth: before.sidebarWidth,
-  });
-
-  await clickLastEmptyParagraph(page);
-  await expect(page.getByRole("group", { name: "Editor typography" }))
-    .toBeVisible();
-  await expect(page.getByLabel("Editor font size")).toHaveValue("16");
-  await expect(page.getByLabel("Editor font family")).toHaveValue("System");
-  await expect(page.getByRole("button", { name: "Open font size menu" }))
-    .toBeVisible();
-  await page.getByRole("button", { name: "Open font family menu" }).click();
-  await expect(page.getByRole("listbox", { name: "Font family options" }))
-    .toBeVisible();
-  await expectFloatingTypographyMenu(page, "Font family options");
-  await expect(page.getByRole("option", { name: "Garamond" })).toBeVisible();
-  await page.getByLabel("Editor font family").fill("gar");
-  await expect(page.getByRole("option", { name: "Garamond" })).toBeVisible();
-  await page.getByRole("option", { name: "Garamond" }).click();
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontFamily: expect.stringContaining("Garamond"),
-  });
-  await clickLastEmptyParagraph(page);
-
-  await page.keyboard.press(modifierShortcut("+"));
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    shellFontSize: before.shellFontSize,
-    headerHeight: before.headerHeight,
-    sidebarWidth: before.sidebarWidth,
     editorFontScale: "1.08",
-  });
-  const enlarged = await getEditorScaleMetrics(page);
-  expect(enlarged.editorFontSize).toBeGreaterThan(before.editorFontSize);
-  await expect(page.getByLabel("Editor font size")).toHaveValue("17");
-
-  await page.getByLabel("Editor font size").fill("20");
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1.25",
     shellFontSize: before.shellFontSize,
     headerHeight: before.headerHeight,
     sidebarWidth: before.sidebarWidth,
   });
-  await expect(page.getByLabel("Editor font size")).toHaveValue("20");
-
-  await page.getByRole("button", { name: "Open font size menu" }).click();
-  await expect(page.getByRole("listbox", { name: "Editor font size presets" }))
-    .toBeVisible();
-  await expectFloatingTypographyMenu(page, "Editor font size presets");
-  await page.getByRole("option", { name: "48" }).click();
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "3",
-    shellFontSize: before.shellFontSize,
-    headerHeight: before.headerHeight,
-    sidebarWidth: before.sidebarWidth,
-  });
-  await expect(page.getByLabel("Editor font size")).toHaveValue("48");
-
-  await page.getByLabel("Editor font size").fill("18");
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1.13",
-    shellFontSize: before.shellFontSize,
-    headerHeight: before.headerHeight,
-    sidebarWidth: before.sidebarWidth,
-  });
+  await expect(page.locator(".editor-font-size-toast"))
+    .toHaveText("Font size 17px");
+  await expect(page.locator(".editor-font-size-toast"))
+    .toHaveCount(0, { timeout: 3000 });
+  await expect(page.getByRole("group", { name: "Editor typography" }))
+    .toHaveCount(0);
 
   await page.getByRole("button", { name: "New session" }).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("group", { name: "Editor typography" }))
-    .toHaveCount(0);
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1",
-    editorFontFamily: expect.stringContaining("SF Pro Text"),
+    editorFontScale: "1.08",
     shellFontSize: before.shellFontSize,
     headerHeight: before.headerHeight,
     sidebarWidth: before.sidebarWidth,
@@ -288,41 +258,72 @@ test("changes only the active editor typography", async ({ page }) => {
     headerHeight: before.headerHeight,
     sidebarWidth: before.sidebarWidth,
   });
-
-  await clickLastEmptyParagraph(page);
-  await page.keyboard.press(modifierShortcut("-"));
-  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "0.92",
-    shellFontSize: before.shellFontSize,
-    headerHeight: before.headerHeight,
-    sidebarWidth: before.sidebarWidth,
-  });
+  await expect(page.locator(".editor-font-size-toast"))
+    .toHaveText("Font size 16px");
 
   await page.getByRole("tab").first().click();
   await expect(page.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1.13",
-    editorFontFamily: expect.stringContaining("Garamond"),
+    editorFontScale: "1",
     shellFontSize: before.shellFontSize,
     headerHeight: before.headerHeight,
     sidebarWidth: before.sidebarWidth,
   });
 });
 
-test("uses preferences editor defaults for newly created sessions", async ({ page }) => {
+test("changes editor typography globally from preferences", async ({ page }) => {
   const before = await getEditorScaleMetrics(page);
 
   await page.keyboard.press(modifierShortcut(","));
   const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
   await expect(preferencesPanel).toBeVisible();
-  await expect(page.getByText("Default editor")).toBeVisible();
-  await expect(page.getByText("Used for newly created sessions."))
+  await expect(preferencesPanel.getByRole("tab", { name: "General" }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#preferences-editor")).toHaveCount(0);
+  await preferencesPanel.getByRole("tab", { name: "Editor" }).click();
+  await expect(preferencesPanel.getByRole("tab", { name: "Editor" }))
+    .toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#preferences-editor .preferences-section-title"))
+    .toHaveText("Editor");
+  await expect(page.getByText("Font family and size apply to every session tab."))
+    .toBeVisible();
+  const fontFamilyRow = preferencesPanel.locator(".editor-font-family-setting");
+  const fontSizeRow = preferencesPanel.locator(".editor-font-size-setting");
+  await expect(fontFamilyRow.getByText("Font family")).toBeVisible();
+  await expect(fontSizeRow.getByText("Font size")).toBeVisible();
+  await expect(fontSizeRow.getByLabel("Editor font size")).toHaveValue("16");
+  await expect(fontFamilyRow.getByLabel("Editor font family")).toHaveValue("System");
+  await expect(page.getByRole("button", { name: "Open font size menu" }))
     .toBeVisible();
 
-  await page.getByLabel("Editor font family").fill("gar");
+  await fontFamilyRow.getByLabel("Editor font family").fill("gar");
+  await expect(page.getByRole("listbox", { name: "Font family options" }))
+    .toBeVisible();
+  await expectFloatingTypographyMenu(page, "Font family options", {
+    maxWidth: 238,
+  });
+  await expect(page.getByRole("option", { name: "Garamond" })).toBeVisible();
   await page.getByRole("option", { name: "Garamond" }).click();
-  await page.getByLabel("Editor font size").fill("24");
+  await fontSizeRow.getByLabel("Editor font size").fill("24");
+  await expect(fontSizeRow.getByLabel("Editor font size")).toHaveValue("24");
+  await fontSizeRow.getByRole("button", { name: "Open font size menu" }).click();
+  await expect(page.getByRole("listbox", { name: "Editor font size presets" }))
+    .toBeVisible();
+  await expectFloatingTypographyMenu(page, "Editor font size presets", {
+    maxWidth: 104,
+  });
+  await page.getByRole("option", { name: "48" }).click();
+  await expect(fontSizeRow.getByLabel("Editor font size")).toHaveValue("48");
+  await fontSizeRow.getByLabel("Editor font size").fill("24");
   await page.getByRole("button", { name: "Close preferences" }).click();
+
+  await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
+    editorFontScale: "1.5",
+    editorFontFamily: expect.stringContaining("Garamond"),
+    shellFontSize: before.shellFontSize,
+    headerHeight: before.headerHeight,
+    sidebarWidth: before.sidebarWidth,
+  });
 
   await page.getByRole("button", { name: "New session" }).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
@@ -338,9 +339,49 @@ test("uses preferences editor defaults for newly created sessions", async ({ pag
   await page.getByRole("tab").first().click();
   await expect(page.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
-    editorFontScale: "1",
-    editorFontFamily: expect.stringContaining("SF Pro Text"),
+    editorFontScale: "1.5",
+    editorFontFamily: expect.stringContaining("Garamond"),
   });
+});
+
+test("shows table of contents in tab mode only when enabled from preferences", async ({ page }) => {
+  await expect(page.getByTestId("editor-toc")).toHaveCount(0);
+
+  await page.keyboard.press(modifierShortcut(","));
+  const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(preferencesPanel).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Editor" }).click();
+  const tocSwitch = preferencesPanel.getByRole("switch", {
+    name: "Show table of contents",
+  });
+  await expect(tocSwitch).toHaveAttribute("aria-checked", "false");
+  await tocSwitch.click();
+  await expect(tocSwitch).toHaveAttribute("aria-checked", "true");
+  await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+
+  const tableOfContents = page.getByTestId("editor-toc");
+  await expect(tableOfContents).toBeVisible();
+  await expect(tableOfContents.getByRole("button", {
+    name: /Jump to Welcome to BlockNote!, heading level 1/,
+  })).toBeVisible();
+  await expect(tableOfContents.getByRole("button", {
+    name: /Jump to Toggle Heading, heading level 1/,
+  })).toBeVisible();
+
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "sticky",
+  );
+  await expect(page.getByTestId("editor-toc")).toHaveCount(0);
+
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "tabs",
+  );
+  await expect(page.getByTestId("editor-toc")).toBeVisible();
 });
 
 test("keeps tab and command select-all outside the editor from moving chrome focus or selecting chrome", async ({ page }) => {
@@ -357,13 +398,33 @@ test("keeps tab and command select-all outside the editor from moving chrome foc
 
   await clickLastEmptyParagraph(page);
   await expect(page.getByRole("group", { name: "Editor typography" }))
-    .toBeVisible();
+    .toHaveCount(0);
   await page.keyboard.press(modifierShortcut("A"));
   const editorSelection = await page.evaluate(() => window.getSelection()?.toString() ?? "");
   expect(editorSelection.length).toBeGreaterThan(0);
 });
 
+test("selects all content when the document only has a toggle list block", async ({ page }) => {
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await clickLastEmptyParagraph(page);
+
+  await page.keyboard.type("/");
+  const slashMenu = page.getByRole("listbox");
+  await expect(slashMenu).toBeVisible();
+  await slashMenu.getByText("Toggle List", { exact: true }).click();
+  await page.keyboard.type("only toggle item");
+  await expect(page.getByTestId("sticky-editor-surface").getByText("only toggle item"))
+    .toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("A"));
+  await expect.poll(async () =>
+    await page.evaluate(() => window.getSelection()?.toString() ?? ""),
+  ).toContain("only toggle item");
+});
+
 test("supports light/dark mode and readable sidebar tab background customization", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate(() => {
     window.EyeDropper = class {
       async open() {
@@ -372,12 +433,10 @@ test("supports light/dark mode and readable sidebar tab background customization
     };
   });
 
-  const modeSwitch = page.getByRole("switch", { name: "Theme mode" });
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
 
-  await modeSwitch.click();
+  await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "true");
   await expect.poll(async () => {
     return await page.evaluate(() => {
       const shell = document.querySelector("[data-testid='sticky-shell']");
@@ -395,19 +454,65 @@ test("supports light/dark mode and readable sidebar tab background customization
     activeTabBackground: "rgb(224, 213, 162)",
   });
 
-  await modeSwitch.click();
+  await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "light");
-  await expect(modeSwitch).toHaveAttribute("aria-checked", "false");
 
   await page.keyboard.press(modifierShortcut(","));
   const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
   await expect(preferencesPanel).toBeVisible();
+  await expect(preferencesPanel.getByRole("tablist", { name: "Preferences pages" }))
+    .toBeVisible();
+  await expect(preferencesPanel.getByRole("tab", { name: "General" }))
+    .toHaveAttribute("aria-selected", "true");
   await expect(preferencesPanel.getByRole("switch", { name: "Theme mode" })).toBeVisible();
+  await expect(preferencesPanel.getByText("Keyboard shortcuts")).toHaveCount(0);
+  await expect(preferencesPanel.getByLabel("Editor font size")).toHaveCount(0);
+  await preferencesPanel.getByRole("tab", { name: "Editor" }).click();
+  await expect(preferencesPanel.getByLabel("Editor font size")).toBeVisible();
+  await expect(preferencesPanel.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
+  await preferencesPanel.getByRole("tab", { name: "Shortcuts" }).click();
   await expect(preferencesPanel.getByText("Keyboard shortcuts")).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Trash" }).click();
+  await expect(preferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await expect(preferencesPanel.getByText("Keyboard shortcuts")).toHaveCount(0);
+  await expect(preferencesPanel.getByText("Appearance")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Color wheel mode" })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Tab color target" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Tab background" })).toHaveCount(0);
   await expect(page.getByRole("slider", { name: "Tab background color" })).toHaveCount(0);
+  await expect(page.getByRole("slider", { name: "Session tab color" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Eyedropper" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(preferencesPanel).toHaveCount(0);
+
+  await page.locator(".session-tab-row").first().click({ button: "right" });
+  const sessionMenu = page.getByRole("menu", { name: /Session options/ });
+  await expect(sessionMenu).toBeVisible();
+  await expect(sessionMenu.getByRole("menuitem", { name: "Color..." })).toBeVisible();
+  await expect(sessionMenu.getByRole("menuitem", { name: "Reset color" })).toHaveCount(0);
+  await sessionMenu.getByRole("menuitem", { name: "Color..." }).click();
+
+  const sessionColorPanel = page.getByRole("dialog", { name: "Session color panel" });
+  await expect(sessionColorPanel).toBeVisible();
+  await page.setViewportSize({ width: 640, height: 360 });
+  await expect.poll(async () =>
+    await page.evaluate(() => {
+      const panel = document.querySelector(".color-panel");
+      const body = panel?.querySelector(".preferences-panel-body");
+      const rect = panel?.getBoundingClientRect();
+
+      return {
+        bodyCanScroll: body ? body.scrollHeight > body.clientHeight : false,
+        bodyOverflowY: body ? getComputedStyle(body).overflowY : "",
+        bottomInsideViewport: rect ? rect.bottom <= window.innerHeight : false,
+      };
+    }),
+  ).toMatchObject({
+    bodyCanScroll: true,
+    bodyOverflowY: "auto",
+    bottomInsideViewport: true,
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.getByRole("slider", { name: "Session tab color" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Eyedropper" })).toBeEnabled();
   await expect(page.getByRole("slider", { name: "Color brightness" })).toBeVisible();
@@ -433,6 +538,18 @@ test("supports light/dark mode and readable sidebar tab background customization
   await expect(opacitySlider).toHaveValue("0.42");
   await expectActiveTabColor(page, "backgroundColor", "rgba(0, 255, 49, 0.42)");
   await expectActiveTabColor(page, "color", "rgb(31, 31, 31)");
+  await expect(page.getByLabel("HSL session tab color value"))
+    .toHaveValue(/\/ 42%\)$/);
+  await expect(page.getByLabel("RGB session tab color value"))
+    .toHaveValue(/\/ 42%\)$/);
+  await expect(page.getByLabel("LCH session tab color value"))
+    .toHaveValue(/\/ 42%\)$/);
+
+  const copiedRgbValue = await page.getByLabel("RGB session tab color value").inputValue();
+  await page.getByRole("button", { name: "Copy RGB" }).click();
+  await expect.poll(async () =>
+    await page.evaluate(() => navigator.clipboard.readText()),
+  ).toBe(copiedRgbValue);
   await opacitySlider.evaluate((input) => {
     input.value = "1";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -468,7 +585,7 @@ test("supports light/dark mode and readable sidebar tab background customization
   await expectActiveTabColor(page, "backgroundColor", "rgb(0, 255, 49)");
   await expectActiveTabColor(page, "color", "rgb(31, 31, 31)");
   await page.keyboard.press("Escape");
-  await expect(preferencesPanel).toHaveCount(0);
+  await expect(sessionColorPanel).toHaveCount(0);
 
   await page.getByRole("button", { name: "New session" }).click();
   await expect(page.getByRole("tab")).toHaveCount(2);
@@ -493,22 +610,27 @@ test("supports light/dark mode and readable sidebar tab background customization
   expect(tabStates.activeBoxShadow).not.toBe(tabStates.inactiveBoxShadow);
   expect(tabStates.activeBoxShadow).not.toBe("none");
 
-  await page.getByRole("tab").first().click();
-  await page.keyboard.press(modifierShortcut(","));
-
+  await page.locator(".session-tab-row").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Color..." }).click();
   await expect(page.getByRole("slider", { name: "Session tab color" })).toBeVisible();
 
   await page.getByLabel("HSL session tab color value").fill("hsl(0deg 100% 50%)");
-  await expectActiveTabColor(page, "backgroundColor", "rgb(255, 0, 0)");
-  await expectActiveTabColor(page, "color", "rgb(251, 251, 250)");
+  await expect.poll(() => getTabCssValue(page, 0, "backgroundColor"))
+    .toBe("rgb(255, 0, 0)");
+  await expect.poll(() => getTabCssValue(page, 0, "color"))
+    .toBe("rgba(251, 251, 250, 0.72)");
 
   await page.getByLabel("RGB session tab color value").fill("rgb(0 0 255)");
-  await expectActiveTabColor(page, "backgroundColor", "rgb(0, 0, 255)");
-  await expectActiveTabColor(page, "color", "rgb(251, 251, 250)");
+  await expect.poll(() => getTabCssValue(page, 0, "backgroundColor"))
+    .toBe("rgb(0, 0, 255)");
+  await expect.poll(() => getTabCssValue(page, 0, "color"))
+    .toBe("rgba(251, 251, 250, 0.72)");
 
   await page.getByLabel("LCH session tab color value").fill("lch(100% 0 0deg)");
-  await expectActiveTabColor(page, "backgroundColor", "rgb(255, 255, 255)");
-  await expectActiveTabColor(page, "color", "rgb(31, 31, 31)");
+  await expect.poll(() => getTabCssValue(page, 0, "backgroundColor"))
+    .toBe("rgb(255, 255, 255)");
+  await expect.poll(() => getTabCssValue(page, 0, "color"))
+    .toBe("rgba(31, 31, 31, 0.72)");
 
   const styles = await page.evaluate(() => ({
     bodyBackground: getComputedStyle(document.body).backgroundColor,
@@ -529,7 +651,6 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
     const footer = document.querySelector("[data-testid='session-sidebar-footer']");
     const button = footer.querySelector(".layout-mode-button");
     const icon = button.querySelector(".notepane-action-icon");
-    const label = button.querySelector(".layout-mode-label");
     const buttonRect = button.getBoundingClientRect();
     const iconRect = icon.getBoundingClientRect();
 
@@ -541,19 +662,21 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
       ).length,
       iconWidth: Math.round(iconRect.width),
       iconTone: icon.getAttribute("data-icon-tone"),
-      label: label.textContent.trim(),
+      labelCount: button.querySelectorAll(".layout-mode-label").length,
+      targetMode: button.getAttribute("data-layout-mode-target"),
     };
   });
 
-  expect(tabsModeButtonMetrics.buttonWidth).toBeGreaterThanOrEqual(120);
-  expect(tabsModeButtonMetrics.footerControlCount).toBe(3);
+  expect(tabsModeButtonMetrics.buttonWidth).toBe(66);
+  expect(tabsModeButtonMetrics.footerControlCount).toBe(4);
   expect(tabsModeButtonMetrics.headerLayoutButtonCount).toBe(0);
-  expect(tabsModeButtonMetrics.iconWidth).toBeGreaterThanOrEqual(24);
+  expect(tabsModeButtonMetrics.iconWidth).toBe(48);
   expect(tabsModeButtonMetrics.iconTone).toBe("sticky");
-  expect(tabsModeButtonMetrics.label).toBe("Sticky");
+  expect(tabsModeButtonMetrics.labelCount).toBe(0);
+  expect(tabsModeButtonMetrics.targetMode).toBe("sticky");
 
   await page.getByTestId("session-sidebar-footer")
-    .getByRole("button", { name: "Layout mode" })
+    .getByRole("button", { name: "Switch to Sticky windows mode" })
     .click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
@@ -569,122 +692,45 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
     .toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sticky color" }))
     .toHaveCount(0);
-
-  await clickLastEmptyParagraph(page);
-  const toolbarToggle = page.getByRole("button", { name: "Show editor tools" });
-  await expect(toolbarToggle).toBeVisible();
-  await expect(toolbarToggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByRole("group", { name: "Editor typography" }))
+  await expect(page.getByRole("button", { name: "Show editor tools" }))
     .toHaveCount(0);
-  const collapsedToolsScrollMetrics = await page.evaluate(() => {
-    const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-    const editor = surface.querySelector(".bn-editor");
-    const toggle = document.querySelector(".editor-toolbar-toggle");
-    editor.style.paddingBottom = "960px";
-    const before = toggle.getBoundingClientRect();
-    surface.scrollTop = Math.min(640, surface.scrollHeight - surface.clientHeight);
-    const after = toggle.getBoundingClientRect();
-
-    return {
-      position: getComputedStyle(toggle).position,
-      topDelta: Math.abs(after.top - before.top),
-      rightDelta: Math.abs(
-        window.innerWidth - after.right - (window.innerWidth - before.right),
-      ),
-      scrollTop: Math.round(surface.scrollTop),
-      visibleAfterScroll: after.top >= 0 && after.bottom <= window.innerHeight,
-    };
+  const stickyPinButton = page.getByRole("button", { name: "Pin window" });
+  const stickySettingsButton = page.getByRole("button", { name: "Sticky settings" });
+  const stickyTrashButton = page.getByRole("button", { name: "Move note to trash" });
+  const stickyModeButton = page.getByRole("button", { name: "Switch to Tab sessions mode" });
+  await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
+    actionListOpacity: "0",
+    actionListPointerEvents: "none",
+    previewIconClass: expect.stringContaining("lucide-ellipsis"),
+    previewOpacity: "1",
+    previewPinCount: 0,
   });
 
-  expect(collapsedToolsScrollMetrics.position).toBe("fixed");
-  expect(collapsedToolsScrollMetrics.scrollTop).toBeGreaterThan(100);
-  expect(collapsedToolsScrollMetrics.topDelta).toBeLessThanOrEqual(1);
-  expect(collapsedToolsScrollMetrics.rightDelta).toBeLessThanOrEqual(1);
-  expect(collapsedToolsScrollMetrics.visibleAfterScroll).toBe(true);
-
-  await toolbarToggle.click();
-  await expect(page.getByRole("group", { name: "Editor typography" }))
-    .toBeVisible();
-  const stickyModeButtonMetrics = await page.evaluate(() => {
-    const toolbar = document.querySelector(".editor-typography-control");
-    const button = toolbar.querySelector(".layout-mode-button");
-    const pinButton = toolbar.querySelector(".sticky-pin-button");
-    const colorButton = toolbar.querySelector(".sticky-color-button");
-    const icon = button.querySelector(".notepane-action-icon");
-    const label = button.querySelector(".layout-mode-label");
-    const buttonRect = button.getBoundingClientRect();
-    const pinRect = pinButton.getBoundingClientRect();
-    const colorRect = colorButton.getBoundingClientRect();
-    const iconRect = icon.getBoundingClientRect();
-    const toolbarRect = toolbar.getBoundingClientRect();
-    const fontFamilyRect = toolbar
-      .querySelector(".editor-font-family-combobox")
-      .getBoundingClientRect();
-    const fontSizeRect = toolbar
-      .querySelector(".editor-font-size-combobox")
-      .getBoundingClientRect();
-
-    return {
-      buttonWidth: Math.round(buttonRect.width),
-      buttonBeforePin: buttonRect.right <= pinRect.left,
-      pinBeforeColor: pinRect.right <= colorRect.left,
-      colorBeforeFontFamily: colorRect.right <= fontFamilyRect.left,
-      fontSizeIsLastControl: fontSizeRect.right <= toolbarRect.right - 3,
-      exportButtonCount: toolbar.querySelectorAll(".export-icon-button").length,
-      headerActionButtonCount: document.querySelectorAll(".sticky-header-actions button").length,
-      toolbarColorButtonCount: toolbar.querySelectorAll(".sticky-color-button").length,
-      toolbarPinButtonCount: toolbar.querySelectorAll(".sticky-pin-button").length,
-      toolbarVisible: toolbarRect.width > 0 && toolbarRect.height > 0,
-      iconWidth: Math.round(iconRect.width),
-      iconTone: icon.getAttribute("data-icon-tone"),
-      label: label.textContent.trim(),
-    };
+  await page.locator(".sticky-header-actions").hover();
+  await expect(stickyPinButton).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export PDF" })).toBeVisible();
+  await expect(stickyModeButton).toBeVisible();
+  await expect(stickySettingsButton).toBeVisible();
+  await expect(stickyTrashButton).toBeVisible();
+  await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
+    actionListOpacity: "1",
+    actionListPointerEvents: "auto",
+    previewOpacity: "0",
   });
-
-  expect(stickyModeButtonMetrics.buttonWidth).toBeGreaterThanOrEqual(70);
-  expect(stickyModeButtonMetrics.buttonBeforePin).toBe(true);
-  expect(stickyModeButtonMetrics.pinBeforeColor).toBe(true);
-  expect(stickyModeButtonMetrics.colorBeforeFontFamily).toBe(true);
-  expect(stickyModeButtonMetrics.fontSizeIsLastControl).toBe(true);
-  expect(stickyModeButtonMetrics.exportButtonCount).toBe(0);
-  expect(stickyModeButtonMetrics.headerActionButtonCount).toBe(0);
-  expect(stickyModeButtonMetrics.toolbarColorButtonCount).toBe(1);
-  expect(stickyModeButtonMetrics.toolbarPinButtonCount).toBe(1);
-  expect(stickyModeButtonMetrics.toolbarVisible).toBe(true);
-  expect(stickyModeButtonMetrics.iconWidth).toBeGreaterThanOrEqual(20);
-  expect(stickyModeButtonMetrics.iconTone).toBe("tabs");
-  expect(stickyModeButtonMetrics.label).toBe("Tabs");
-
-  const expandedToolsScrollMetrics = await page.evaluate(() => {
-    const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-    const toolbar = document.querySelector(".editor-typography-control");
-    const before = toolbar.getBoundingClientRect();
-    surface.scrollTop = Math.min(surface.scrollTop + 240, surface.scrollHeight - surface.clientHeight);
-    const after = toolbar.getBoundingClientRect();
-
-    return {
-      position: getComputedStyle(toolbar).position,
-      topDelta: Math.abs(after.top - before.top),
-      rightDelta: Math.abs(
-        window.innerWidth - after.right - (window.innerWidth - before.right),
-      ),
-      visibleAfterScroll: after.top >= 0 && after.bottom <= window.innerHeight,
-    };
-  });
-
-  expect(expandedToolsScrollMetrics.position).toBe("fixed");
-  expect(expandedToolsScrollMetrics.topDelta).toBeLessThanOrEqual(1);
-  expect(expandedToolsScrollMetrics.rightDelta).toBeLessThanOrEqual(1);
-  expect(expandedToolsScrollMetrics.visibleAfterScroll).toBe(true);
 
   await expect.poll(async () => await page.evaluate(() => {
     const shell = document.querySelector("[data-testid='sticky-shell']");
     const header = document.querySelector("[data-testid='sticky-header']");
     const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-    const action = document.querySelector(".sticky-pin-button");
+    const action = document.querySelector(".sticky-settings-button");
+    const actionIcon = action.querySelector(".notepane-action-icon");
+    const modeButton = document.querySelector(".sticky-header-actions .layout-mode-button");
+    const modeIcon = modeButton.querySelector(".notepane-action-icon");
     const headerActions = document.querySelector(".sticky-header-actions");
-    const shellEdge = getComputedStyle(shell, "::before");
+    const headerActionButtons = [...headerActions.querySelectorAll("button")];
+    const shellBefore = getComputedStyle(shell, "::before");
     const headerStyle = getComputedStyle(header);
+    const actionStyle = getComputedStyle(action);
 
     return {
       shellBorderStyle: getComputedStyle(shell).borderTopStyle,
@@ -692,83 +738,156 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
       shellRadius: getComputedStyle(shell).borderTopLeftRadius,
       shellBoxShadow: getComputedStyle(shell).boxShadow,
       shellMargin: getComputedStyle(shell).marginTop,
-      shellEdgeBackground: shellEdge.backgroundImage,
-      shellEdgeBackdrop:
-        shellEdge.getPropertyValue("-webkit-backdrop-filter") ||
-        shellEdge.backdropFilter,
+      shellBeforeBackground: shellBefore.backgroundImage,
+      shellBeforeBackdrop:
+        shellBefore.getPropertyValue("-webkit-backdrop-filter") ||
+        shellBefore.backdropFilter,
+      shellBeforeContent: shellBefore.content,
       headerBackground: headerStyle.backgroundColor,
+      headerBackgroundIsOpaque: headerStyle.backgroundColor !== "rgba(0, 0, 0, 0)",
       headerBorderColor: headerStyle.borderBottomColor,
       headerBoxShadow: headerStyle.boxShadow,
+      headerShadowIsVisible: headerStyle.boxShadow !== "none",
       headerPosition: headerStyle.position,
       headerTitleCount: document.querySelectorAll("[data-testid='sticky-title-drag-label']").length,
       headerTitleFormCount: document.querySelectorAll(".sticky-title-form").length,
       surfacePaddingTop: getComputedStyle(surface).paddingTop,
       actionRadius: getComputedStyle(action).borderTopLeftRadius,
+      actionWidth: Math.round(action.getBoundingClientRect().width),
+      actionHeight: Math.round(action.getBoundingClientRect().height),
+      actionBackground: actionStyle.backgroundColor,
+      actionBorder: actionStyle.borderTopColor,
+      actionShadow: actionStyle.boxShadow,
+      actionIconWidth: Math.round(actionIcon.getBoundingClientRect().width),
+      actionIconClass: actionIcon.getAttribute("class"),
+      actionIconTone: actionIcon.getAttribute("data-icon-tone"),
+      headerActionButtonLabels: headerActionButtons.map((button) =>
+        button.getAttribute("aria-label")
+      ),
+      headerActionButtonCount: headerActions.querySelectorAll("button").length,
+      headerActionButtonWidths: headerActionButtons.map((button) =>
+        Math.round(button.getBoundingClientRect().width)
+      ),
       headerActionDisplay: getComputedStyle(headerActions).display,
+      modeIconLayout: modeIcon.getAttribute("data-icon-layout"),
+      modeIconWidth: Math.round(modeIcon.getBoundingClientRect().width),
+      modeTarget: modeButton.getAttribute("data-layout-mode-target"),
     };
   })).toMatchObject({
     shellBorderStyle: "none",
     shellBorderWidth: "0px",
     shellRadius: "0px",
     shellMargin: "0px",
-    actionRadius: "5px",
+    actionRadius: "7px",
+    actionWidth: 24,
+    actionHeight: 24,
+    actionBorder: "rgba(0, 0, 0, 0)",
+    actionShadow: "none",
+    actionIconWidth: 16,
+    actionIconClass: expect.stringContaining("lucide-palette"),
+    actionIconTone: "palette",
+    headerActionButtonLabels: [
+      "Pin window",
+      "Export PDF",
+      "Switch to Tab sessions mode",
+      "Sticky settings",
+      "Move note to trash",
+    ],
+    headerActionButtonCount: 5,
+    headerActionButtonWidths: [24, 24, 24, 24, 24],
     headerTitleCount: 0,
     headerTitleFormCount: 0,
-    headerBackground: "rgba(0, 0, 0, 0)",
+    headerBackground: "rgb(255, 248, 217)",
+    headerBackgroundIsOpaque: true,
     headerBorderColor: "rgba(0, 0, 0, 0)",
-    headerBoxShadow: "none",
+    headerShadowIsVisible: true,
     headerPosition: "absolute",
     surfacePaddingTop: "30px",
-    headerActionDisplay: "none",
+    headerActionDisplay: "flex",
+    modeIconLayout: "compact",
+    modeIconWidth: 16,
+    modeTarget: "tabs",
     shellBoxShadow: "none",
-    shellEdgeBackground: expect.stringContaining("linear-gradient"),
-    shellEdgeBackdrop: expect.stringContaining("blur"),
+    shellBeforeBackground: "none",
+    shellBeforeBackdrop: "none",
+    shellBeforeContent: "none",
   });
 
-  await page.getByTestId("sticky-editor-surface").click({
-    position: {
-      x: 140,
-      y: 180,
-    },
+  await expect(stickyPinButton).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".sticky-header-actions .sticky-pin-button .notepane-icon-pin"))
+    .toHaveAttribute("data-pin-state", "unpinned");
+  await stickyPinButton.click();
+  const stickyUnpinButton = page.getByRole("button", { name: "Unpin window" });
+  await expect(stickyUnpinButton).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".sticky-header-actions .sticky-pin-button .notepane-icon-pin"))
+    .toHaveAttribute("data-pin-state", "pinned");
+  await expect.poll(() =>
+    page.evaluate(() =>
+      getComputedStyle(document.querySelector(".sticky-header-actions .sticky-pin-button .notepane-icon-pin")).fill,
+    ),
+  ).toBe("rgb(216, 59, 59)");
+  await page.mouse.move(120, 120);
+  await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
+    actionListOpacity: "0",
+    previewOpacity: "1",
+    previewPinCount: 1,
+    previewPinFill: "rgb(216, 59, 59)",
+    previewPinState: "pinned",
   });
+  await page.locator(".sticky-header-actions").hover();
+  await stickyUnpinButton.click();
+  await expect(page.getByRole("button", { name: "Pin window" }))
+    .toHaveAttribute("aria-pressed", "false");
+
+  await clickLastEmptyParagraph(page);
+  await expect(page.getByRole("button", { name: "Show editor tools" }))
+    .toHaveCount(0);
   await expect(page.getByRole("group", { name: "Editor typography" }))
     .toHaveCount(0);
-  await expect(toolbarToggle).toBeVisible();
-  await toolbarToggle.click();
 
-  const stickyToolbar = page.getByRole("group", { name: "Editor typography" });
-  await expect(stickyToolbar.getByRole("button", { name: "Sticky color" }))
+  await page.locator(".sticky-header-actions").hover();
+  await stickySettingsButton.click();
+  const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
+  await expect(settingsPanel).toBeVisible();
+  await expect(settingsPanel.getByRole("group", { name: "Editor typography" }))
+    .toHaveCount(0);
+  await expect(settingsPanel.getByRole("button", { name: "Sticky color" }))
+    .toHaveCount(0);
+  await expect(settingsPanel.getByRole("slider", { name: "Sticky color" }))
     .toBeVisible();
-  await expect(stickyToolbar.locator(".sticky-color-button .notepane-icon-palette"))
-    .toHaveAttribute("data-icon-tone", "palette");
-  await expect(stickyToolbar.getByRole("button", { name: "Pin window" }))
-    .toBeVisible();
-  await expect(stickyToolbar.getByRole("button", { name: "Pin window" }))
-    .toHaveAttribute("aria-pressed", "false");
-  await expect(stickyToolbar.locator(".sticky-pin-button .notepane-icon-pin"))
-    .toHaveAttribute("data-pin-state", "unpinned");
+  await expect(settingsPanel.getByRole("button", { name: "Pin window" }))
+    .toHaveCount(0);
+  await expect(settingsPanel.getByRole("button", { name: "Switch to Tab sessions mode" }))
+    .toHaveCount(0);
+  const stickySettingsMetrics = await page.evaluate(() => {
+    const windowElement = document.querySelector(".sticky-settings-window");
+    const colorSection = windowElement.querySelector(".color-settings-section");
+
+    return {
+      colorSectionInsideModal: windowElement.contains(colorSection),
+      modeButtonCount: windowElement.querySelectorAll(".layout-mode-button").length,
+      pinButtonCount: windowElement.querySelectorAll(".sticky-pin-button").length,
+      windowSectionTitles: [...windowElement.querySelectorAll(".preferences-section-title")]
+        .map((element) => element.textContent),
+    };
+  });
+  expect(stickySettingsMetrics).toMatchObject({
+    colorSectionInsideModal: true,
+    modeButtonCount: 0,
+    pinButtonCount: 0,
+  });
+  expect(stickySettingsMetrics.windowSectionTitles).toContain("Appearance");
+  expect(stickySettingsMetrics.windowSectionTitles).not.toContain("Window");
+
+  await expect(settingsPanel.getByRole("group", { name: "Editor typography" }))
+    .toHaveCount(0);
+  await expect(settingsPanel.getByRole("button", { name: "Pin window" }))
+    .toHaveCount(0);
   await expect(page.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Hide sidebar" })).toHaveCount(0);
   await expect(page.locator("[aria-label='NotePane wordmark']")).toHaveCount(0);
   await expect.poll(() => getHeaderHeight(page)).toBeLessThan(tabModeHeaderHeight);
 
-  await stickyToolbar.getByRole("button", { name: "Pin window" }).click();
-  await expect(stickyToolbar.getByRole("button", { name: "Unpin window" }))
-    .toHaveAttribute("aria-pressed", "true");
-  await expect(stickyToolbar.locator(".sticky-pin-button .notepane-icon-pin"))
-    .toHaveAttribute("data-pin-state", "pinned");
-  await expect.poll(() =>
-    page.evaluate(() =>
-      getComputedStyle(document.querySelector(".sticky-pin-button")).color,
-    ),
-  ).toBe("rgb(206, 45, 59)");
-  await stickyToolbar.getByRole("button", { name: "Unpin window" }).click();
-  await expect(stickyToolbar.getByRole("button", { name: "Pin window" }))
-    .toHaveAttribute("aria-pressed", "false");
-
-  await stickyToolbar.getByRole("button", { name: "Sticky color" }).click();
-  const preferencesPanel = page.getByRole("dialog", { name: "Sticky color panel" });
-  await expect(preferencesPanel).toBeVisible();
   await expect(page.getByRole("group", { name: "Pastel colors" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "Sticky color" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "Color opacity" })).toBeVisible();
@@ -795,72 +914,507 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
   }).toBe("rgba(255, 215, 232, 0.5)");
 
   await page.keyboard.press("Escape");
-  await expect(stickyToolbar).toBeVisible();
-  await stickyToolbar.getByRole("button", { name: "Layout mode" })
-    .click();
+  await expect(settingsPanel).toHaveCount(0);
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
     "tabs",
   );
   await expect(page.getByRole("button", { name: "Pin window" })).toHaveCount(0);
-  await expect(page.getByRole("switch", { name: "Theme mode" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Theme mode" })).toHaveCount(0);
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expectActiveTabColor(page, "backgroundColor", "rgba(255, 215, 232, 0.5)");
   await expectActiveTabColor(page, "color", "rgb(31, 31, 31)");
 });
 
 test("keeps sticky editor chrome readable against dark custom backgrounds", async ({ page }) => {
-  await page.getByRole("button", { name: "Layout mode" }).click();
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
     "sticky",
   );
 
-  await clickLastEmptyParagraph(page);
-  await page.getByRole("button", { name: "Show editor tools" }).click();
-  const stickyToolbar = page.getByRole("group", { name: "Editor typography" });
-  await expect(stickyToolbar).toBeVisible();
-  await stickyToolbar.getByRole("button", { name: "Sticky color" }).click();
+  await expect(page.getByRole("button", { name: "Show editor tools" }))
+    .toHaveCount(0);
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Sticky settings" }).click();
+  const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
+  await expect(settingsPanel).toBeVisible();
+
+  await page.getByLabel("HEX sticky color value").fill("ffffff");
+  await expect.poll(() => getStickyContrastSnapshot(page)).toMatchObject({
+    textColor: "#37352f",
+    headerIsOpaque: true,
+    editorTextContrastIsReadable: true,
+    codeTextContrastIsReadable: true,
+    tableBorderContrastIsReadable: true,
+    settingsButtonContrastIsReadable: true,
+  });
+
   await page.getByLabel("HEX sticky color value").fill("202020");
 
-  await expect.poll(async () => {
-    return await page.evaluate(() => {
-      const shell = document.querySelector("[data-testid='sticky-shell']");
-      const header = document.querySelector("[data-testid='sticky-header']");
-      const cell = document.querySelector(".bn-editor td");
-      const code = document.querySelector(".bn-editor code");
-      const parseRgb = (color) => {
-        const channels = color.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
-        return channels.slice(0, 3);
-      };
-      const luminance = (color) => {
-        const [red, green, blue] = parseRgb(color).map((channel) => {
-          const normalized = channel / 255;
-          return normalized <= 0.03928
-            ? normalized / 12.92
-            : ((normalized + 0.055) / 1.055) ** 2.4;
-        });
-        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-      };
-      const borderColor = cell ? getComputedStyle(cell).borderTopColor : "";
-      const codeTextColor = code ? getComputedStyle(code).color : "";
-      const headerColor = header ? getComputedStyle(header).backgroundColor : "";
-      return {
-        textColor: getComputedStyle(shell)
-          .getPropertyValue("--sticky-text-color")
-          .trim(),
-        headerStaysDark: luminance(headerColor) < 0.08,
-        borderIsReadable: luminance(borderColor) > 0.55,
-        codeTextIsReadable: luminance(codeTextColor) > 0.55,
-      };
-    });
-  }).toEqual({
+  await expect.poll(() => getStickyContrastSnapshot(page)).toMatchObject({
     textColor: "#f7f7f4",
-    headerStaysDark: true,
-    borderIsReadable: true,
-    codeTextIsReadable: true,
+    headerIsOpaque: true,
+    editorTextContrastIsReadable: true,
+    codeTextContrastIsReadable: true,
+    tableBorderContrastIsReadable: true,
+    settingsButtonContrastIsReadable: true,
   });
+
+  await page.keyboard.press("Escape");
+  await expectStickyTableChromeReadable(page);
+  await expectStickyPlaceholderReadable(page);
+
+  await page.keyboard.press(modifierShortcut("Shift+L"));
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Sticky settings" }).click();
+  await page.getByLabel("HEX sticky color value").fill("ffffff");
+  await page.getByLabel("Color opacity").evaluate((input) => {
+    input.value = "0.35";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await expect.poll(() => getStickyContrastSnapshot(page)).toMatchObject({
+    textColor: "#f7f7f4",
+    tableBorderContrastIsReadable: true,
+    settingsButtonContrastIsReadable: true,
+  });
+  await page.keyboard.press("Escape");
+  await expectStickyTableChromeReadable(page);
+  await expectStickyPlaceholderReadable(page);
 });
+
+async function expectStickyTableChromeReadable(page) {
+  await page.getByRole("table").hover();
+  const lastCell = page.getByRole("cell", { name: "Table Cell" }).last();
+  await lastCell.hover();
+  await lastCell.click();
+  await lastCell.hover();
+
+  await expect(page.locator(".bn-extend-button").first()).toBeVisible();
+  await expect(page.locator(".bn-table-handle, .bn-table-cell-handle").first())
+    .toBeVisible();
+  await expect.poll(() => getStickyTableChromeSnapshot(page)).toMatchObject({
+    hasExtendButton: true,
+    hasTableHandle: true,
+    controlTextContrastIsReadable: true,
+    controlSurfaceUsesStickyTone: true,
+    controlShadowIsVisible: true,
+  });
+
+  await page.locator(".bn-table-handle, .bn-table-cell-handle").first().click();
+  const tableMenu = page.locator(".bn-table-handle-menu, .bn-menu-dropdown")
+    .filter({ has: page.locator("[role='menuitem']") })
+    .first();
+  await expect(tableMenu).toBeVisible();
+  await page.locator(".bn-table-handle-menu [role='menuitem'], .bn-menu-dropdown [role='menuitem']")
+    .first()
+    .hover();
+  await expect.poll(() => getStickyTableMenuSnapshot(page)).toMatchObject({
+    menuTextContrastIsReadable: true,
+    menuSurfaceUsesPortalTone: true,
+    menuHoverUsesPortalTone: true,
+    menuShadowIsVisible: true,
+  });
+  await page.keyboard.press("Escape");
+}
+
+async function expectStickyPlaceholderReadable(page) {
+  await clickLastEmptyParagraph(page);
+
+  await expect.poll(() => getStickyPlaceholderSnapshot(page)).toMatchObject({
+    hasPlaceholder: true,
+    placeholderUsesMutedTone: true,
+    placeholderContrastIsReadable: true,
+  });
+}
+
+async function getStickyTableChromeSnapshot(page) {
+  return await page.evaluate(() => {
+    const shell = document.querySelector("[data-testid='sticky-shell']");
+    const controls = [...document.querySelectorAll(
+      ".bn-table-handle, .bn-table-cell-handle, .bn-extend-button",
+    )].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        Number(style.opacity) > 0.01
+      );
+    });
+    const firstControl = controls[0];
+    const firstExtendButton = controls.find((element) =>
+      element.classList.contains("bn-extend-button"),
+    );
+    const firstTableHandle = controls.find((element) =>
+      element.classList.contains("bn-table-handle") ||
+      element.classList.contains("bn-table-cell-handle"),
+    );
+    const parseColor = (color) => {
+      const normalizedColor = color.trim();
+      if (/^#[0-9a-f]{6}$/i.test(normalizedColor)) {
+        return {
+          r: Number.parseInt(normalizedColor.slice(1, 3), 16),
+          g: Number.parseInt(normalizedColor.slice(3, 5), 16),
+          b: Number.parseInt(normalizedColor.slice(5, 7), 16),
+          a: 1,
+        };
+      }
+      const channels = color.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
+      return {
+        r: channels[0] ?? 0,
+        g: channels[1] ?? 0,
+        b: channels[2] ?? 0,
+        a: channels[3] ?? 1,
+      };
+    };
+    const formatRgb = ({ r, g, b }) =>
+      `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+    const compositeColor = (foregroundColor, backgroundColor) => {
+      const foreground = parseColor(foregroundColor);
+      const background = parseColor(backgroundColor);
+      const alpha = foreground.a;
+      return formatRgb({
+        r: foreground.r * alpha + background.r * (1 - alpha),
+        g: foreground.g * alpha + background.g * (1 - alpha),
+        b: foreground.b * alpha + background.b * (1 - alpha),
+      });
+    };
+    const luminance = (color) => {
+      const { r, g, b } = parseColor(color);
+      const [red, green, blue] = [r, g, b].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const contrastRatio = (foreground, background) => {
+      const first = luminance(foreground);
+      const second = luminance(background);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    const colorDistance = (firstColor, secondColor) => {
+      const first = parseColor(firstColor);
+      const second = parseColor(secondColor);
+      return Math.hypot(first.r - second.r, first.g - second.g, first.b - second.b);
+    };
+    const shellStyle = getComputedStyle(shell);
+    const shellBackground =
+      shellStyle.getPropertyValue("--sticky-effective-bg").trim() ||
+      shellStyle.backgroundColor;
+    const controlStyle = firstControl ? getComputedStyle(firstControl) : null;
+    const controlBackground = controlStyle?.backgroundColor ?? shellBackground;
+    const visibleControlBackground = compositeColor(controlBackground, shellBackground);
+
+    return {
+      controlCount: controls.length,
+      hasExtendButton: Boolean(firstExtendButton),
+      hasTableHandle: Boolean(firstTableHandle),
+      controlTextContrastIsReadable:
+        contrastRatio(controlStyle?.color ?? "transparent", visibleControlBackground) >= 4.5,
+      controlSurfaceUsesStickyTone:
+        colorDistance(visibleControlBackground, shellBackground) >= 4 &&
+        colorDistance(visibleControlBackground, shellBackground) <= 64,
+      controlShadowIsVisible:
+        Boolean(controlStyle) && controlStyle.boxShadow !== "none",
+    };
+  });
+}
+
+async function getStickyTableMenuSnapshot(page) {
+  return await page.evaluate(() => {
+    const shell = document.querySelector("[data-testid='sticky-shell']");
+    const menus = [...document.querySelectorAll(
+      ".bn-table-handle-menu, .bn-menu-dropdown, .mantine-Menu-dropdown",
+    )].filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none" &&
+        Number(style.opacity) > 0.01
+      );
+    });
+    const menu = menus[0];
+    const item = menu?.querySelector("[role='menuitem'], .mantine-Menu-item");
+    const parseColor = (color) => {
+      const normalizedColor = color.trim();
+      if (/^#[0-9a-f]{6}$/i.test(normalizedColor)) {
+        return {
+          r: Number.parseInt(normalizedColor.slice(1, 3), 16),
+          g: Number.parseInt(normalizedColor.slice(3, 5), 16),
+          b: Number.parseInt(normalizedColor.slice(5, 7), 16),
+          a: 1,
+        };
+      }
+      const channels = color.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
+      return {
+        r: channels[0] ?? 0,
+        g: channels[1] ?? 0,
+        b: channels[2] ?? 0,
+        a: channels[3] ?? 1,
+      };
+    };
+    const luminance = (color) => {
+      const { r, g, b } = parseColor(color);
+      const [red, green, blue] = [r, g, b].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const contrastRatio = (foreground, background) => {
+      const first = luminance(foreground);
+      const second = luminance(background);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    const colorDistance = (firstColor, secondColor) => {
+      const first = parseColor(firstColor);
+      const second = parseColor(secondColor);
+      return Math.hypot(first.r - second.r, first.g - second.g, first.b - second.b);
+    };
+    const shellStyle = getComputedStyle(shell);
+    const bodyStyle = getComputedStyle(document.body);
+    const menuStyle = menu ? getComputedStyle(menu) : null;
+    const itemStyle = item ? getComputedStyle(item) : null;
+    const expectedMenuBackground = bodyStyle
+      .getPropertyValue("--sticky-portal-menu-bg")
+      .trim();
+    const expectedMenuHoverBackground = bodyStyle
+      .getPropertyValue("--sticky-portal-menu-hover-bg")
+      .trim();
+    const shellBackground = shellStyle
+      .getPropertyValue("--sticky-effective-bg")
+      .trim();
+
+    return {
+      menuTextContrastIsReadable:
+        Boolean(menuStyle) &&
+        contrastRatio(itemStyle?.color ?? menuStyle.color, menuStyle.backgroundColor) >= 4.5,
+      menuSurfaceUsesPortalTone:
+        Boolean(menuStyle) &&
+        colorDistance(menuStyle.backgroundColor, expectedMenuBackground) <= 2,
+      menuHoverUsesPortalTone:
+        Boolean(itemStyle) &&
+        colorDistance(itemStyle.backgroundColor, expectedMenuHoverBackground) <= 2,
+      menuShadowIsVisible:
+        Boolean(menuStyle) && menuStyle.boxShadow !== "none",
+      menuSeparatesFromShell:
+        Boolean(menuStyle) &&
+        colorDistance(menuStyle.backgroundColor, shellBackground) >= 4,
+    };
+  });
+}
+
+async function getStickyPlaceholderSnapshot(page) {
+  return await page.evaluate(() => {
+    const shell = document.querySelector("[data-testid='sticky-shell']");
+    const shellStyle = getComputedStyle(shell);
+    const shellBackground = shellStyle
+      .getPropertyValue("--sticky-effective-bg")
+      .trim();
+    const expectedPlaceholderColor = shellStyle
+      .getPropertyValue("--sticky-muted-color")
+      .trim();
+    const placeholders = [...document.querySelectorAll(".bn-editor .bn-block-content")]
+      .map((element) => {
+        const style = getComputedStyle(element, "::after");
+        return {
+          color: style.color,
+          content: style.content,
+        };
+      })
+      .filter(({ content }) => content && content !== "none" && content !== "\"\"");
+    const placeholder = placeholders[0];
+    const parseColor = (color) => {
+      const normalizedColor = color.trim();
+      if (/^#[0-9a-f]{6}$/i.test(normalizedColor)) {
+        return {
+          r: Number.parseInt(normalizedColor.slice(1, 3), 16),
+          g: Number.parseInt(normalizedColor.slice(3, 5), 16),
+          b: Number.parseInt(normalizedColor.slice(5, 7), 16),
+          a: 1,
+        };
+      }
+      const channels = color.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
+      return {
+        r: channels[0] ?? 0,
+        g: channels[1] ?? 0,
+        b: channels[2] ?? 0,
+        a: channels[3] ?? 1,
+      };
+    };
+    const formatRgb = ({ r, g, b }) =>
+      `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+    const compositeColor = (foregroundColor, backgroundColor) => {
+      const foreground = parseColor(foregroundColor);
+      const background = parseColor(backgroundColor);
+      const alpha = foreground.a;
+      return formatRgb({
+        r: foreground.r * alpha + background.r * (1 - alpha),
+        g: foreground.g * alpha + background.g * (1 - alpha),
+        b: foreground.b * alpha + background.b * (1 - alpha),
+      });
+    };
+    const luminance = (color) => {
+      const { r, g, b } = parseColor(color);
+      const [red, green, blue] = [r, g, b].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const contrastRatio = (foreground, background) => {
+      const first = luminance(foreground);
+      const second = luminance(background);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    const colorDistance = (firstColor, secondColor) => {
+      const first = parseColor(firstColor);
+      const second = parseColor(secondColor);
+      return Math.hypot(first.r - second.r, first.g - second.g, first.b - second.b);
+    };
+    const visiblePlaceholderColor = placeholder
+      ? compositeColor(placeholder.color, shellBackground)
+      : "transparent";
+
+    return {
+      hasPlaceholder: Boolean(placeholder),
+      placeholderUsesMutedTone:
+        Boolean(placeholder) &&
+        colorDistance(placeholder.color, expectedPlaceholderColor) <= 2,
+      placeholderContrastIsReadable:
+        Boolean(placeholder) &&
+        contrastRatio(visiblePlaceholderColor, shellBackground) >= 3,
+    };
+  });
+}
+
+async function getStickyContrastSnapshot(page) {
+  return await page.evaluate(() => {
+    const shell = document.querySelector("[data-testid='sticky-shell']");
+    const header = document.querySelector("[data-testid='sticky-header']");
+    const settingsButton = document.querySelector(".sticky-settings-button");
+    const editor = document.querySelector(".bn-editor");
+    const code = document.querySelector(".bn-editor code");
+    const tableCell = document.querySelector(".bn-editor td, .bn-editor th, .bn-editor .bn-table-cell");
+    const codeStyle = code ? getComputedStyle(code) : null;
+    const tableCellStyle = tableCell ? getComputedStyle(tableCell) : null;
+    const parseColor = (color) => {
+      const normalizedColor = color.trim();
+      if (/^#[0-9a-f]{6}$/i.test(normalizedColor)) {
+        return {
+          r: Number.parseInt(normalizedColor.slice(1, 3), 16),
+          g: Number.parseInt(normalizedColor.slice(3, 5), 16),
+          b: Number.parseInt(normalizedColor.slice(5, 7), 16),
+          a: 1,
+        };
+      }
+      const channels = color.match(/\d+(\.\d+)?/g)?.map(Number) ?? [0, 0, 0];
+      return {
+        r: channels[0] ?? 0,
+        g: channels[1] ?? 0,
+        b: channels[2] ?? 0,
+        a: channels[3] ?? 1,
+      };
+    };
+    const formatRgb = ({ r, g, b }) =>
+      `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+    const compositeColor = (foregroundColor, backgroundColor) => {
+      const foreground = parseColor(foregroundColor);
+      const background = parseColor(backgroundColor);
+      const alpha = foreground.a;
+      return formatRgb({
+        r: foreground.r * alpha + background.r * (1 - alpha),
+        g: foreground.g * alpha + background.g * (1 - alpha),
+        b: foreground.b * alpha + background.b * (1 - alpha),
+      });
+    };
+    const luminance = (color) => {
+      const { r, g, b } = parseColor(color);
+      const [red, green, blue] = [r, g, b].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.03928
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const contrastRatio = (foreground, background) => {
+      const first = luminance(foreground);
+      const second = luminance(background);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    const shellStyle = getComputedStyle(shell);
+    const shellBackground =
+      shellStyle.getPropertyValue("--sticky-effective-bg").trim() ||
+      shellStyle.backgroundColor;
+    const codeBackground = codeStyle?.backgroundColor ?? shellBackground;
+    const tableBorderColor = tableCellStyle?.borderTopColor ?? shellStyle
+      .getPropertyValue("--sticky-table-border-color");
+    const visibleTableBorderColor = compositeColor(tableBorderColor, shellBackground);
+    const settingsButtonColor = getComputedStyle(settingsButton).color;
+    const headerBackgroundColor = getComputedStyle(header).backgroundColor;
+
+    return {
+      textColor: shellStyle.getPropertyValue("--sticky-text-color").trim(),
+      settingsButtonColor,
+      headerIsOpaque: parseColor(headerBackgroundColor).a >= 0.96,
+      editorTextContrastIsReadable:
+        contrastRatio(getComputedStyle(editor).color, shellBackground) >= 4.5,
+      codeTextContrastIsReadable:
+        contrastRatio(codeStyle?.color ?? shellStyle.color, codeBackground) >= 4.5,
+      tableBorderColor,
+      visibleTableBorderColor,
+      tableBorderContrastIsReadable:
+        contrastRatio(visibleTableBorderColor, shellBackground) >= 3,
+      settingsButtonContrastIsReadable:
+        contrastRatio(settingsButtonColor, shellBackground) >= 4.5,
+    };
+  });
+}
+
+async function expectAdaptiveTooltipPlacement(page, label, expectedPlacement) {
+  await page.getByRole("button", { name: label }).hover();
+
+  await expect(page.locator(".adaptive-tooltip")).toBeVisible();
+  await expect.poll(async () =>
+    await page.evaluate(() => {
+      const tooltip = document.querySelector(".adaptive-tooltip");
+      if (!tooltip) {
+        return null;
+      }
+
+      const rect = tooltip.getBoundingClientRect();
+      return {
+        bottomInsideViewport: rect.bottom <= window.innerHeight - 1,
+        leftInsideViewport: rect.left >= 1,
+        placement: tooltip.getAttribute("data-placement"),
+        rightInsideViewport: rect.right <= window.innerWidth - 1,
+        topInsideViewport: rect.top >= 1,
+      };
+    }),
+  ).toMatchObject({
+    bottomInsideViewport: true,
+    leftInsideViewport: true,
+    placement: expectedPlacement,
+    rightInsideViewport: true,
+    topInsideViewport: true,
+  });
+}
 
 async function getHeaderHeight(page) {
   return await page.evaluate(() => {
@@ -924,18 +1478,79 @@ async function expectNewSessionButtonBelowLastTab(page) {
   expect(layout.distanceFromSidebarBottom).toBeGreaterThan(160);
 }
 
-test("opens export format choices from the keyboard shortcut without a share icon", async ({ page }) => {
+test("exports PDF from the button and keyboard shortcut without a format menu", async ({ page }) => {
   await clickLastEmptyParagraph(page);
-  await expect(page.getByRole("button", { name: "Export note" })).toHaveCount(0);
+  const exportButton = page.getByRole("button", { name: "Export PDF" });
+  await expect(exportButton).toBeVisible();
+
+  await exportButton.click();
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveText("PDF export is available in the desktop app.");
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveCount(0, { timeout: 4000 });
 
   await page.keyboard.press(modifierShortcut("Shift+E"));
 
-  const exportMenu = page.getByRole("menu", { name: "Export format" });
-  await expect(exportMenu).toBeVisible();
-  await expect(exportMenu.getByRole("menuitem", { name: "Export as PNG" }))
-    .toBeVisible();
-  await expect(exportMenu.getByRole("menuitem", { name: "Export as PDF" }))
-    .toBeVisible();
+  await expect(page.getByRole("menu", { name: "Export format" }))
+    .toHaveCount(0);
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveText("PDF export is available in the desktop app.");
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveCount(0, { timeout: 4000 });
+});
+
+test("keeps adaptive tooltips visible from every viewport edge", async ({ page }) => {
+  await page.evaluate(() => {
+    document.querySelector("#tooltip-boundary-fixtures")?.remove();
+    const container = document.createElement("div");
+    container.id = "tooltip-boundary-fixtures";
+    const fixtures = [
+      {
+        label: "Bottom edge tooltip",
+        style: { bottom: "2px", left: "50%", transform: "translateX(-50%)" },
+      },
+      {
+        label: "Top edge tooltip",
+        style: { left: "50%", top: "2px", transform: "translateX(-50%)" },
+      },
+      {
+        label: "Right edge tooltip",
+        style: { right: "2px", top: "160px" },
+      },
+      {
+        label: "Left edge tooltip",
+        style: { left: "2px", top: "220px" },
+      },
+    ];
+
+    for (const fixture of fixtures) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "has-tooltip";
+      button.textContent = fixture.label;
+      button.setAttribute("data-tooltip", `${fixture.label} should stay visible`);
+      Object.assign(button.style, {
+        position: "fixed",
+        zIndex: "900",
+        width: "24px",
+        height: "24px",
+        overflow: "hidden",
+        border: "0",
+        padding: "0",
+        opacity: "0.01",
+        pointerEvents: "auto",
+        ...fixture.style,
+      });
+      container.append(button);
+    }
+
+    document.body.append(container);
+  });
+
+  await expectAdaptiveTooltipPlacement(page, "Bottom edge tooltip", "top");
+  await expectAdaptiveTooltipPlacement(page, "Top edge tooltip", "bottom");
+  await expectAdaptiveTooltipPlacement(page, "Right edge tooltip", "bottom");
+  await expectAdaptiveTooltipPlacement(page, "Left edge tooltip", "bottom");
 });
 
 test("uses transparent chrome-free styles while exporting", async ({ page }) => {
@@ -1020,6 +1635,27 @@ test("creates and switches note sessions from the sidebar", async ({ page }) => 
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
 });
 
+test("keeps the sidebar compact when creating a session", async ({ page }) => {
+  const sidebar = page.getByTestId("session-sidebar");
+
+  await page.getByRole("button", { name: "Hide sidebar" }).click();
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
+
+  const compactWidth = await sidebar.evaluate((element) =>
+    Math.round(element.getBoundingClientRect().width),
+  );
+
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
+  await expect.poll(async () =>
+    await sidebar.evaluate((element) =>
+      Math.round(element.getBoundingClientRect().width),
+    ),
+  ).toBe(compactWidth);
+});
+
 test("scrolls the sidebar when many session tabs exist", async ({ page }) => {
   const newSessionButton = page.getByRole("button", { name: "New session" });
 
@@ -1083,12 +1719,78 @@ test("resizes and collapses the sidebar from its right edge", async ({ page }) =
   await expect(sidebar.locator(".session-name").first()).toBeHidden();
   await expect(sidebar.locator(".session-shortcut").first()).toBeHidden();
   await expect(page.getByRole("button", { name: "Show sidebar" })).toBeVisible();
+  const compactFooterMetrics = await page.evaluate(() => {
+    const sidebarElement = document.querySelector("[data-testid='session-sidebar']");
+    const footer = document.querySelector("[data-testid='session-sidebar-footer']");
+    const layoutButton = footer.querySelector(".layout-mode-button");
+    const layoutIcon = layoutButton.querySelector(".notepane-mode-transition-icon");
+    const sidebarRect = sidebarElement.getBoundingClientRect();
+    const sidebarCenterX = sidebarRect.left + sidebarRect.width / 2;
+    const buttonRects = [...footer.querySelectorAll("button")].map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        centerDelta: Math.abs((rect.left + rect.width / 2) - sidebarCenterX),
+        insideSidebar:
+          rect.left >= sidebarRect.left &&
+          rect.right <= sidebarRect.right,
+      };
+    });
+    const iconRect = layoutIcon.getBoundingClientRect();
+
+    return {
+      buttonRects,
+      layoutButtonWidth: Math.round(layoutButton.getBoundingClientRect().width),
+      layoutIconWidth: Math.round(iconRect.width),
+      layoutIconMode: layoutIcon.getAttribute("data-icon-layout"),
+      transitionArrowCount: layoutIcon.querySelectorAll(".mode-transition-arrow, .mode-transition-arrow-head").length,
+    };
+  });
+  expect(compactFooterMetrics.buttonRects).toHaveLength(4);
+  expect(compactFooterMetrics.buttonRects.every((rect) => rect.insideSidebar)).toBe(true);
+  expect(compactFooterMetrics.buttonRects.every((rect) => rect.centerDelta <= 1)).toBe(true);
+  expect(compactFooterMetrics.buttonRects.every((rect) => rect.width === 32)).toBe(true);
+  expect(compactFooterMetrics.buttonRects.every((rect) => rect.height === 30)).toBe(true);
+  expect(compactFooterMetrics.layoutButtonWidth).toBe(32);
+  expect(compactFooterMetrics.layoutIconWidth).toBe(20);
+  expect(compactFooterMetrics.layoutIconMode).toBe("compact");
+  expect(compactFooterMetrics.transitionArrowCount).toBe(0);
 
   await page.getByRole("button", { name: "Show sidebar" }).click();
   await expect(page.getByTestId("session-sidebar")).toBeVisible();
   await expect(page.getByTestId("session-sidebar")).toHaveAttribute("data-sidebar-state", "expanded");
   await expect(page.getByTestId("session-sidebar").getByRole("button", { name: "Hide sidebar" }))
     .toBeVisible();
+  const expandedFooterMetrics = await page.evaluate(() => {
+    const footer = document.querySelector("[data-testid='session-sidebar-footer']");
+    const layoutButton = footer.querySelector(".layout-mode-button");
+    const layoutIcon = layoutButton.querySelector(".notepane-mode-transition-icon");
+    const tabGlyph = layoutIcon.querySelector(".mode-tabs-glyph");
+    const stickyGlyph = layoutIcon.querySelector(".mode-sticky-glyph");
+    const arrowRects = [
+      ...layoutIcon.querySelectorAll(".mode-transition-arrow, .mode-transition-arrow-head"),
+    ].map((element) => element.getBoundingClientRect());
+    const tabGlyphRect = tabGlyph.getBoundingClientRect();
+    const stickyGlyphRect = stickyGlyph.getBoundingClientRect();
+    const arrowLeft = Math.min(...arrowRects.map((rect) => rect.left));
+    const arrowRight = Math.max(...arrowRects.map((rect) => rect.right));
+    const arrowCenterX = arrowLeft + (arrowRight - arrowLeft) / 2;
+    const glyphGapCenterX = tabGlyphRect.right + (stickyGlyphRect.left - tabGlyphRect.right) / 2;
+
+    return {
+      layoutButtonWidth: Math.round(layoutButton.getBoundingClientRect().width),
+      layoutIconWidth: Math.round(layoutIcon.getBoundingClientRect().width),
+      layoutIconMode: layoutIcon.getAttribute("data-icon-layout"),
+      transitionArrowCount: layoutIcon.querySelectorAll(".mode-transition-arrow, .mode-transition-arrow-head").length,
+      transitionArrowCenterDelta: Math.abs(arrowCenterX - glyphGapCenterX),
+    };
+  });
+  expect(expandedFooterMetrics.layoutButtonWidth).toBe(66);
+  expect(expandedFooterMetrics.layoutIconWidth).toBe(58);
+  expect(expandedFooterMetrics.layoutIconMode).toBe("transition");
+  expect(expandedFooterMetrics.transitionArrowCount).toBe(2);
+  expect(expandedFooterMetrics.transitionArrowCenterDelta).toBeLessThanOrEqual(1);
 });
 
 test("keeps the new session control aligned with session rows", async ({ page }) => {
@@ -1122,7 +1824,7 @@ test("keeps the new session control aligned with session rows", async ({ page })
 });
 
 test("keeps the sticky header draggable without title chrome", async ({ page }) => {
-  await page.getByRole("button", { name: "Layout mode" }).click();
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
     "sticky",
@@ -1134,17 +1836,20 @@ test("keeps the sticky header draggable without title chrome", async ({ page }) 
 
   const headerRegions = await page.evaluate(() => {
     const header = document.querySelector("[data-testid='sticky-header']");
+    const trashButton = document.querySelector(".sticky-trash-button");
 
     return {
       headerRegion: getComputedStyle(header).getPropertyValue("-webkit-app-region"),
       headerDragHandle: header.getAttribute("data-window-drag-handle"),
       headerHeight: Math.round(header.getBoundingClientRect().height),
+      trashButtonCursor: getComputedStyle(trashButton).cursor,
     };
   });
 
   expect(headerRegions.headerRegion).toBe("drag");
   expect(headerRegions.headerDragHandle).toBe("true");
   expect(headerRegions.headerHeight).toBe(30);
+  expect(headerRegions.trashButtonCursor).toBe("pointer");
   await page.getByTestId("sticky-header").dblclick({
     position: {
       x: 220,
@@ -1172,7 +1877,8 @@ test("creates blank sessions after the initial template note", async ({ page }) 
 
   await clickLastEmptyParagraph(page);
   await page.keyboard.type("new blank session");
-  await expect(page.getByText("new blank session")).toBeVisible();
+  await expect(page.getByTestId("sticky-editor-surface").getByText("new blank session"))
+    .toBeVisible();
 });
 
 test("renames a session by double-clicking its tab", async ({ page }) => {
@@ -1184,34 +1890,153 @@ test("renames a session by double-clicking its tab", async ({ page }) => {
   await expect(page.getByLabel("Session name")).toHaveCount(0);
 });
 
+test("derives untitled session names from editor content", async ({ page }) => {
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab").nth(1)).toHaveAccessibleName(/Untitled/);
+
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Generated title from editor content");
+
+  await expect(page.getByRole("tab", {
+    name: /Generated title from editor content/,
+  })).toBeVisible();
+});
+
 test("deletes sidebar sessions while preserving the last remaining tab", async ({ page }) => {
   await page.getByRole("button", { name: "New session" }).click();
 
   await expect(page.getByRole("tab")).toHaveCount(2);
   const secondDeleteButton = page.locator(".session-delete-button").nth(1);
+  const secondIndexLabel = secondDeleteButton.locator(".session-index-label");
+  const secondDeleteGlyph = secondDeleteButton.locator(".session-index-delete");
+  const secondShortcut = page.locator(".session-tab-row").nth(1).locator(".session-shortcut");
   await expect(secondDeleteButton).toHaveAttribute(
     "aria-label",
     "Delete session Untitled",
   );
   const editorSurfaceBox = await page.getByTestId("sticky-editor-surface").boundingBox();
   await page.mouse.move(editorSurfaceBox.x + 24, editorSurfaceBox.y + 24);
-  await expect(secondDeleteButton).toBeHidden();
-  await page.getByRole("tab").nth(1).hover();
   await expect(secondDeleteButton).toBeVisible();
-  const deleteButtonRightGap = await page.evaluate(() => {
+  await expect(secondIndexLabel).toHaveCSS("opacity", "1");
+  await expect(secondDeleteGlyph).toHaveCSS("opacity", "0");
+  await expect(secondShortcut).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await page.getByRole("tab").nth(1).hover();
+  await expect(secondIndexLabel).toHaveCSS("opacity", "0");
+  await expect(secondDeleteGlyph).toHaveCSS("opacity", "1");
+  await expect(secondShortcut).toHaveCSS("opacity", "1");
+  const deleteButtonLeftGap = await page.evaluate(() => {
     const secondTab = document.querySelectorAll(".session-tab-row")[1];
     const deleteButton = secondTab.querySelector(".session-delete-button");
     const tabRect = secondTab.getBoundingClientRect();
     const deleteButtonRect = deleteButton.getBoundingClientRect();
-    return Math.round(tabRect.right - deleteButtonRect.right);
+    return Math.round(deleteButtonRect.left - tabRect.left);
   });
-  expect(deleteButtonRightGap).toBeGreaterThanOrEqual(0);
-  expect(deleteButtonRightGap).toBeLessThanOrEqual(4);
+  expect(deleteButtonLeftGap).toBeGreaterThanOrEqual(0);
+  expect(deleteButtonLeftGap).toBeLessThanOrEqual(4);
   await secondDeleteButton.click();
 
   await expect(page.getByRole("tab")).toHaveCount(1);
-  await expect(page.locator(".session-delete-button").first()).toBeHidden();
   await expect(page.locator(".session-delete-button").first()).toBeDisabled();
+  await expect(page.locator(".session-index-label").first()).toHaveCSS("opacity", "1");
+  await expect(page.locator(".session-index-delete").first()).toHaveCSS("opacity", "0");
+
+  await page.keyboard.press(modifierShortcut(","));
+  const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(preferencesPanel).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Trash" }).click();
+  const trashList = preferencesPanel.getByRole("list", { name: "Trash notes" });
+  const trashRow = trashList.getByRole("listitem").filter({ hasText: "Untitled" });
+  await expect(trashRow).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(1);
+
+  await trashRow.getByRole("button", { name: "Restore Untitled" }).click();
+  await expect(preferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(2);
+  await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+  await expect(preferencesPanel).toHaveCount(0);
+
+  await page.getByRole("tab").nth(1).hover();
+  await page.locator(".session-delete-button").nth(1).click();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(1);
+  await page.keyboard.press(modifierShortcut(","));
+  const reopenedPreferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await reopenedPreferencesPanel.getByRole("tab", { name: "Trash" }).click();
+  const reopenedTrashRow = reopenedPreferencesPanel
+    .getByRole("list", { name: "Trash notes" })
+    .getByRole("listitem")
+    .filter({ hasText: "Untitled" });
+  await reopenedTrashRow.getByRole("button", { name: "Delete permanently Untitled" }).click();
+  const confirmDialog = reopenedPreferencesPanel.getByRole("dialog", {
+    name: "Delete permanently confirmation",
+  });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog.getByText("This note cannot be recovered after deletion."))
+    .toBeVisible();
+  await confirmDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(reopenedTrashRow).toBeVisible();
+
+  await reopenedTrashRow.getByRole("button", { name: "Delete permanently Untitled" }).click();
+  await reopenedPreferencesPanel
+    .getByRole("button", { name: /Yes, permanently delete Untitled/ })
+    .click();
+  await expect(reopenedPreferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await expect(reopenedTrashRow).toHaveCount(0);
+});
+
+test("moves the current sticky note to trash from the sticky header", async ({ page }) => {
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Sticky trash target");
+  await expect(page.getByRole("tab", { name: /Sticky trash target/ }))
+    .toBeVisible();
+
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "sticky",
+  );
+
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Move note to trash" }).click();
+  const confirmDialog = page.getByRole("dialog", {
+    name: "Move note to trash confirmation",
+  });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog.getByText("Move note to trash?")).toBeVisible();
+  await expect(confirmDialog.getByText(/different from closing a sticky window/))
+    .toBeVisible();
+  await confirmDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "sticky",
+  );
+
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Move note to trash" }).click();
+  await expect(confirmDialog).toBeVisible();
+  await confirmDialog.getByRole("button", { name: /Yes, move Sticky trash target to trash/ })
+    .click();
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(1);
+
+  await page.getByRole("button", { name: "Trash" }).click();
+  const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(preferencesPanel).toBeVisible();
+  const trashRow = preferencesPanel
+    .getByRole("list", { name: "Trash notes" })
+    .getByRole("listitem")
+    .filter({ hasText: "Sticky trash target" });
+  await expect(trashRow).toBeVisible();
 });
 
 test("opens BlockNote slash menu with core demo commands", async ({ page }) => {
@@ -1374,9 +2199,10 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
 });
 
 test("keeps BlockNote color and delete menus usable inside the app window", async ({ page }) => {
-  const styledText = page.getByText("Styled Text");
-  await styledText.scrollIntoViewIfNeeded();
-  await styledText.dblclick();
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("FormatTarget");
+  const formattingTarget = page.getByText("FormatTarget");
+  await formattingTarget.dblclick();
   const formattingToolbar = page.getByRole("toolbar");
   await expect(formattingToolbar).toBeVisible();
   const colorsButton = formattingToolbar.getByRole("button", { name: "Colors" });
@@ -1393,8 +2219,19 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await page.locator(".bn-color-picker-dropdown:visible [data-test='text-color-red']").click();
 
   await expect.poll(async () =>
-    page.getByText("Styled Text").evaluate((element) => getComputedStyle(element).color),
+    getInlineStyledTextColor(page, "FormatTarget", "textColor", "red"),
   ).toBe("rgb(224, 62, 62)");
+  await page.keyboard.press("Escape");
+  await formattingTarget.dblclick();
+  await expect(page.getByRole("toolbar")).toBeVisible();
+  await page.getByRole("toolbar").getByRole("button", { name: "Colors" }).click();
+  await expect(page.locator(".bn-color-picker-dropdown:visible")).toBeVisible();
+  await page.locator(".bn-color-picker-dropdown:visible [data-test='background-color-blue']")
+    .click();
+
+  await expect.poll(async () =>
+    getInlineStyledTextBackground(page, "FormatTarget", "backgroundColor", "blue"),
+  ).toBe("rgb(221, 235, 241)");
 
   const paragraph = page.locator(".bn-editor").getByText("Paragraph", { exact: true });
   await page.keyboard.press("Escape");
@@ -1409,6 +2246,61 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   const blockMenu = page.locator(".bn-drag-handle-menu:visible");
   await expect(blockMenu).toBeVisible();
   await expectBlockNoteFloatingMenuInsideViewport(page, ".bn-drag-handle-menu", 60);
+  const blockMenuTopBeforeColors = await blockMenu.evaluate((element) =>
+    Math.round(element.getBoundingClientRect().top),
+  );
+  await page.getByRole("menuitem", { name: "Colors" }).first().click();
+  await expect(page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible"))
+    .toBeVisible();
+  await expectBlockNoteFloatingMenuInsideViewport(
+    page,
+    ".bn-drag-handle-menu .bn-color-picker-dropdown",
+    220,
+    "absolute",
+  );
+  await expect.poll(async () =>
+    await blockMenu.evaluate((element) =>
+      Math.round(element.getBoundingClientRect().top),
+    ),
+  ).toBe(blockMenuTopBeforeColors);
+  await expect.poll(async () =>
+    await blockMenu.evaluate((element) => getComputedStyle(element).overflow),
+  ).toBe("visible");
+  await page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible [data-test='text-color-red']")
+    .first()
+    .click();
+
+  await expect.poll(async () =>
+    paragraph.evaluate((element) => getComputedStyle(element).color),
+  ).toBe("rgb(224, 62, 62)");
+
+  await paragraph.click();
+  const coloredParagraphBox = await paragraph.boundingBox();
+  await page.mouse.move(
+    coloredParagraphBox.x - 24,
+    coloredParagraphBox.y + coloredParagraphBox.height / 2,
+  );
+  await openBlockMenuButton.click();
+  await page.getByRole("menuitem", { name: "Colors" }).first().click();
+  await expect(page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible"))
+    .toBeVisible();
+  await page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible [data-test='background-color-blue']")
+    .first()
+    .click();
+
+  await expect.poll(async () =>
+    paragraph.evaluate((element) =>
+      getComputedStyle(element.closest(".bn-block-content")).backgroundColor,
+    ),
+  ).toBe("rgb(221, 235, 241)");
+
+  await paragraph.click();
+  const finalParagraphBox = await paragraph.boundingBox();
+  await page.mouse.move(
+    finalParagraphBox.x - 24,
+    finalParagraphBox.y + finalParagraphBox.height / 2,
+  );
+  await openBlockMenuButton.click();
   await page.getByRole("menuitem", { name: "Delete" }).click();
 
   await expect(page.locator(".bn-editor").getByText("Paragraph", { exact: true }))
@@ -1464,42 +2356,79 @@ async function pastePlainText(page, text) {
   }, text);
 }
 
-async function expectThemeSwitchThumbCentered(page, mode) {
-  const targetRatio = mode === "dark" ? 0.75 : 0.25;
+async function getInlineStyledTextColor(page, text, styleType, value) {
+  return await page.evaluate(({ text, styleType, value }) => {
+    const styledElement = [...document.querySelectorAll(
+      `[data-style-type='${styleType}'][data-value='${value}']`,
+    )].find((element) => element.textContent === text);
 
-  await expect.poll(async () => {
-    return await page.evaluate((expectedRatio) => {
-      const track = document.querySelector(".theme-mode-switch-track");
-      const thumb = document.querySelector(".theme-mode-switch-thumb");
+    return styledElement ? getComputedStyle(styledElement).color : "";
+  }, { styleType, text, value });
+}
 
-      if (!track || !thumb) {
-        return false;
-      }
+async function getInlineStyledTextBackground(page, text, styleType, value) {
+  return await page.evaluate(({ text, styleType, value }) => {
+    const styledElement = [...document.querySelectorAll(
+      `[data-style-type='${styleType}'][data-value='${value}']`,
+    )].find((element) => element.textContent === text);
 
-      const trackRect = track.getBoundingClientRect();
-      const thumbRect = thumb.getBoundingClientRect();
-      const expectedCenterX = trackRect.left + trackRect.width * expectedRatio;
-      const expectedCenterY = trackRect.top + trackRect.height / 2;
-      const actualCenterX = thumbRect.left + thumbRect.width / 2;
-      const actualCenterY = thumbRect.top + thumbRect.height / 2;
-      const xDelta = Math.abs(actualCenterX - expectedCenterX);
-      const yDelta = Math.abs(actualCenterY - expectedCenterY);
-
-      return xDelta <= 0.5 && yDelta <= 0.5;
-    }, targetRatio);
-  }).toBe(true);
+    return styledElement ? getComputedStyle(styledElement).backgroundColor : "";
+  }, { styleType, text, value });
 }
 
 async function getActionIconColors(page) {
   return await page.evaluate(() => {
-    const readColor = (selector) =>
-      getComputedStyle(document.querySelector(selector)).color;
+    const readColor = (selector) => {
+      const element = document.querySelector(selector);
+
+      return element ? getComputedStyle(element).color : "";
+    };
 
     return {
-      layout: readColor(".layout-mode-button"),
-      sidebar: readColor(".sidebar-toggle"),
+      export: readColor(
+        "[data-testid='session-sidebar-footer'] .export-icon-button .notepane-action-icon",
+      ),
+      layout: readColor(
+        "[data-testid='session-sidebar-footer'] .layout-mode-button .notepane-action-icon",
+      ),
+      sidebar: readColor(".sidebar-toggle .notepane-action-icon"),
+      preferences: readColor(
+        "[data-testid='session-sidebar-footer'] .settings-icon-button .notepane-action-icon",
+      ),
+      trash: readColor(
+        "[data-testid='session-sidebar-footer'] .trash-icon-button .notepane-action-icon",
+      ),
     };
   });
+}
+
+async function getStickyHeaderActionChrome(page) {
+  return await page.evaluate(() => {
+    const actionList = document.querySelector(".sticky-header-action-list");
+    const preview = document.querySelector(".sticky-header-action-preview");
+    const previewIcon = preview?.querySelector(".notepane-icon-ellipsis");
+    const previewPin = preview?.querySelector(".notepane-icon-pin");
+    const actionListStyle = actionList ? getComputedStyle(actionList) : null;
+    const previewStyle = preview ? getComputedStyle(preview) : null;
+    const previewPinStyle = previewPin ? getComputedStyle(previewPin) : null;
+
+    return {
+      actionListOpacity: actionListStyle?.opacity ?? "",
+      actionListPointerEvents: actionListStyle?.pointerEvents ?? "",
+      previewIconClass: previewIcon?.getAttribute("class") ?? "",
+      previewOpacity: previewStyle?.opacity ?? "",
+      previewPinCount: previewPin ? 1 : 0,
+      previewPinFill: previewPinStyle?.fill ?? "",
+      previewPinState: previewPin?.getAttribute("data-pin-state") ?? "",
+    };
+  });
+}
+
+function expectDistinctIconColors(iconColors) {
+  expect(new Set(Object.values(iconColors)).size).toBe(Object.keys(iconColors).length);
+  expect(iconColors.export).not.toBe(iconColors.trash);
+  expect(iconColors.preferences).not.toBe(iconColors.export);
+  expect(iconColors.layout).not.toBe(iconColors.sidebar);
 }
 
 async function expectSystemSymbolIcons(page) {
@@ -1514,7 +2443,7 @@ async function expectSystemSymbolIcons(page) {
     }));
   });
 
-  expect(iconAudit.length).toBeGreaterThanOrEqual(3);
+  expect(iconAudit.length).toBeGreaterThanOrEqual(2);
   for (const icon of iconAudit) {
     expect(icon.family).toBe("system-symbol");
     expect(icon.pack).toBe("lucide");
@@ -1525,9 +2454,9 @@ async function expectSystemSymbolIcons(page) {
   }
 }
 
-async function expectFloatingTypographyMenu(page, ariaLabel) {
+async function expectFloatingTypographyMenu(page, ariaLabel, options = {}) {
   await expect.poll(async () => {
-    return await page.evaluate((label) => {
+    return await page.evaluate(({ label, maxWidth }) => {
       const menu = document.querySelector(`[role='listbox'][aria-label='${label}']`);
       const editorSurface = document.querySelector("[data-testid='sticky-editor-surface']");
       if (!menu || !editorSurface) {
@@ -1543,8 +2472,12 @@ async function expectFloatingTypographyMenu(page, ariaLabel) {
         position: getComputedStyle(menu).position,
         rightInsideViewport: menuRect.right <= window.innerWidth,
         topInsideViewport: menuRect.top >= 0,
+        widthInsideLimit: maxWidth == null || menuRect.width <= maxWidth,
       };
-    }, ariaLabel);
+    }, {
+      label: ariaLabel,
+      maxWidth: options.maxWidth ?? null,
+    });
   }).toMatchObject({
     bottomInsideViewport: true,
     escapesEditorSurface: true,
@@ -1553,10 +2486,16 @@ async function expectFloatingTypographyMenu(page, ariaLabel) {
     position: "fixed",
     rightInsideViewport: true,
     topInsideViewport: true,
+    widthInsideLimit: true,
   });
 }
 
-async function expectBlockNoteFloatingMenuInsideViewport(page, selector, minimumHeight = 1) {
+async function expectBlockNoteFloatingMenuInsideViewport(
+  page,
+  selector,
+  minimumHeight = 1,
+  expectedPosition = "fixed",
+) {
   await expect.poll(async () => {
     return await page.evaluate(({ menuSelector, minimumHeight }) => {
       const visibleMenu = [...document.querySelectorAll(menuSelector)].find((element) => {
@@ -1590,7 +2529,7 @@ async function expectBlockNoteFloatingMenuInsideViewport(page, selector, minimum
     bottomInsideViewport: true,
     heightEnough: true,
     leftInsideViewport: true,
-    position: "fixed",
+    position: expectedPosition,
     rightInsideViewport: true,
     topInsideViewport: true,
   });

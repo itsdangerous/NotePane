@@ -3,6 +3,7 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 
 const DEFAULT_NOTE_TITLE = "Untitled";
+const AUTO_NOTE_TITLE_MAX_LENGTH = 48;
 const DEFAULT_APP_THEME = Object.freeze({
   mode: "light",
 });
@@ -21,6 +22,7 @@ const DEFAULT_EDITOR_FONT_FAMILY = "system";
 const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+  showTableOfContents: false,
 });
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_FONT_FAMILIES = new Set([
@@ -137,10 +139,26 @@ class StickyStore {
   }
 
   listNotes() {
-    return [...this.state.notes].sort((a, b) => a.createdAt - b.createdAt);
+    return this.state.notes
+      .filter((note) => !isTrashedNote(note))
+      .sort(sortNotesByCreatedAt);
+  }
+
+  listTrash() {
+    return this.state.notes
+      .filter(isTrashedNote)
+      .sort((a, b) =>
+        (b.trashedAt ?? 0) - (a.trashedAt ?? 0) ||
+        (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+      );
   }
 
   getNote(noteId) {
+    const note = this.getStoredNote(noteId);
+    return note && !isTrashedNote(note) ? note : null;
+  }
+
+  getStoredNote(noteId) {
     return this.state.notes.find((note) => note.id === noteId) ?? null;
   }
 
@@ -151,6 +169,7 @@ class StickyStore {
     const note = normalizeNote({
       id: randomUUID(),
       title: DEFAULT_NOTE_TITLE,
+      titleManuallyEdited: false,
       blocksJSON: null,
       markdown: "",
       bounds,
@@ -164,6 +183,7 @@ class StickyStore {
       editorFontFamily: Object.hasOwn(options, "editorFontFamily")
         ? options.editorFontFamily
         : editorPreferences.editorFontFamily,
+      trashedAt: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -174,19 +194,77 @@ class StickyStore {
   }
 
   deleteNote(noteId) {
-    const noteIndex = this.state.notes.findIndex((note) => note.id === noteId);
-    if (noteIndex < 0 || this.state.notes.length <= 1) {
+    const note = this.getNote(noteId);
+    const activeNotes = this.listNotes();
+    if (!note || activeNotes.length <= 1) {
       return {
         deleted: false,
-        notes: this.listNotes(),
-        activeNote: this.getNote(noteId) ?? this.listNotes()[0] ?? null,
+        notes: activeNotes,
+        trash: this.listTrash(),
+        activeNote: note ?? activeNotes[0] ?? null,
       };
     }
 
-    const sortedNotes = this.listNotes();
-    const sortedIndex = sortedNotes.findIndex((note) => note.id === noteId);
+    const sortedNotes = activeNotes;
+    const sortedIndex = sortedNotes.findIndex((candidate) => candidate.id === noteId);
     const fallbackActiveNote =
       sortedNotes[sortedIndex + 1] ?? sortedNotes[sortedIndex - 1] ?? null;
+
+    const now = Date.now();
+    note.trashedAt = now;
+    note.detached = false;
+    note.alwaysOnTop = false;
+    note.updatedAt = now;
+    this.save();
+
+    return {
+      deleted: true,
+      notes: this.listNotes(),
+      trash: this.listTrash(),
+      activeNote: fallbackActiveNote
+        ? this.getNote(fallbackActiveNote.id)
+        : this.listNotes()[0] ?? null,
+    };
+  }
+
+  restoreNote(noteId) {
+    const note = this.getStoredNote(noteId);
+    if (!note || !isTrashedNote(note)) {
+      return {
+        restored: false,
+        note: null,
+        notes: this.listNotes(),
+        trash: this.listTrash(),
+        activeNote: this.listNotes()[0] ?? null,
+      };
+    }
+
+    note.trashedAt = null;
+    note.detached = false;
+    note.alwaysOnTop = false;
+    note.updatedAt = Date.now();
+    this.save();
+
+    return {
+      restored: true,
+      note,
+      notes: this.listNotes(),
+      trash: this.listTrash(),
+      activeNote: note,
+    };
+  }
+
+  purgeNote(noteId) {
+    const noteIndex = this.state.notes.findIndex(
+      (note) => note.id === noteId && isTrashedNote(note),
+    );
+    if (noteIndex < 0) {
+      return {
+        deleted: false,
+        notes: this.listNotes(),
+        trash: this.listTrash(),
+      };
+    }
 
     this.state.notes.splice(noteIndex, 1);
     this.save();
@@ -194,9 +272,7 @@ class StickyStore {
     return {
       deleted: true,
       notes: this.listNotes(),
-      activeNote: fallbackActiveNote
-        ? this.getNote(fallbackActiveNote.id)
-        : this.listNotes()[0] ?? null,
+      trash: this.listTrash(),
     };
   }
 
@@ -206,26 +282,21 @@ class StickyStore {
       return null;
     }
 
+    if (Object.hasOwn(appearance ?? {}, "titleManuallyEdited")) {
+      note.titleManuallyEdited = Boolean(appearance.titleManuallyEdited);
+    }
+
     if (Object.hasOwn(appearance ?? {}, "title")) {
-      note.title = normalizeTitle(appearance.title, note.title);
+      note.title = normalizeTitle(
+        appearance.title,
+        note.title || deriveAutomaticTitleFromContent(note.blocksJSON, note.markdown),
+      );
+    } else if (!note.titleManuallyEdited) {
+      note.title = deriveAutomaticTitleFromContent(note.blocksJSON, note.markdown);
     }
 
     if (Object.hasOwn(appearance ?? {}, "theme")) {
       note.theme = normalizeTheme(appearance.theme, note.theme);
-    }
-
-    if (Object.hasOwn(appearance ?? {}, "editorFontScale")) {
-      note.editorFontScale = normalizeEditorFontScale(
-        appearance.editorFontScale,
-        note.editorFontScale,
-      );
-    }
-
-    if (Object.hasOwn(appearance ?? {}, "editorFontFamily")) {
-      note.editorFontFamily = normalizeEditorFontFamily(
-        appearance.editorFontFamily,
-        note.editorFontFamily,
-      );
     }
 
     note.updatedAt = Date.now();
@@ -241,6 +312,9 @@ class StickyStore {
 
     note.blocksJSON = normalizeBlocksJSON(blocksJSON);
     note.markdown = typeof markdown === "string" ? markdown : "";
+    if (!note.titleManuallyEdited) {
+      note.title = deriveAutomaticTitleFromContent(note.blocksJSON, note.markdown);
+    }
     note.seedDemoContent = false;
     note.updatedAt = Date.now();
     this.save();
@@ -290,7 +364,7 @@ class StickyStore {
       temporaryPath,
       JSON.stringify(
         {
-          version: 3,
+          version: 6,
           appTheme: this.state.appTheme,
           layoutMode: this.state.layoutMode,
           editorPreferences: this.state.editorPreferences,
@@ -327,11 +401,23 @@ function normalizeNote(value, options = {}) {
   const source = value && typeof value === "object" ? value : {};
   const resetLegacyAlwaysOnTop = Boolean(options.resetLegacyAlwaysOnTop);
   const editorPreferences = normalizeEditorPreferences(options.editorPreferences);
+  const blocksJSON = normalizeBlocksJSON(source.blocksJSON);
+  const markdown = typeof source.markdown === "string" ? source.markdown : "";
+  const normalizedSourceTitle = normalizeTitle(source.title);
+  const titleManuallyEdited = normalizeTitleManuallyEdited(
+    source,
+    normalizedSourceTitle,
+  );
+  const title = titleManuallyEdited
+    ? normalizedSourceTitle
+    : deriveAutomaticTitleFromContent(blocksJSON, markdown);
+
   return {
     id: typeof source.id === "string" && source.id ? source.id : randomUUID(),
-    title: normalizeTitle(source.title),
-    blocksJSON: normalizeBlocksJSON(source.blocksJSON),
-    markdown: typeof source.markdown === "string" ? source.markdown : "",
+    title,
+    titleManuallyEdited,
+    blocksJSON,
+    markdown,
     bounds: normalizeBounds(source.bounds, {
       width: 960,
       height: 720,
@@ -354,9 +440,25 @@ function normalizeNote(value, options = {}) {
       source.editorFontFamily,
       editorPreferences.editorFontFamily,
     ),
+    trashedAt: normalizeTimestamp(source.trashedAt),
     createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
     updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : now,
   };
+}
+
+function sortNotesByCreatedAt(a, b) {
+  return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+}
+
+function isTrashedNote(note) {
+  return Number.isFinite(note?.trashedAt) && note.trashedAt > 0;
+}
+
+function normalizeTimestamp(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
 }
 
 function normalizeTitle(value, fallback = DEFAULT_NOTE_TITLE) {
@@ -366,6 +468,119 @@ function normalizeTitle(value, fallback = DEFAULT_NOTE_TITLE) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, 80) : fallback;
+}
+
+function normalizeTitleManuallyEdited(source, normalizedTitle) {
+  if (typeof source.titleManuallyEdited === "boolean") {
+    return source.titleManuallyEdited;
+  }
+
+  return normalizedTitle !== DEFAULT_NOTE_TITLE;
+}
+
+function deriveAutomaticTitleFromContent(blocksJSON, markdown) {
+  const blocks = parseBlocksJSON(blocksJSON);
+  const titleFromBlocks = normalizeAutomaticTitleText(
+    extractFirstPlainTextFromBlocks(blocks),
+  );
+  if (titleFromBlocks !== DEFAULT_NOTE_TITLE) {
+    return titleFromBlocks;
+  }
+
+  return normalizeAutomaticTitleText(extractFirstMarkdownLine(markdown));
+}
+
+function normalizeAutomaticTitleText(value) {
+  if (typeof value !== "string") {
+    return DEFAULT_NOTE_TITLE;
+  }
+
+  const normalizedText = value.replace(/\s+/g, " ").trim();
+  return normalizedText
+    ? normalizedText.slice(0, AUTO_NOTE_TITLE_MAX_LENGTH)
+    : DEFAULT_NOTE_TITLE;
+}
+
+function parseBlocksJSON(value) {
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractFirstPlainTextFromBlocks(blocks) {
+  if (!Array.isArray(blocks)) {
+    return "";
+  }
+
+  for (const block of blocks) {
+    const contentText = extractPlainText(block?.content);
+    if (contentText.trim()) {
+      return contentText;
+    }
+
+    const childText = extractFirstPlainTextFromBlocks(block?.children);
+    if (childText.trim()) {
+      return childText;
+    }
+  }
+
+  return "";
+}
+
+function extractPlainText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(extractPlainText).join("");
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+
+  if (Array.isArray(value.rows)) {
+    return value.rows
+      .flatMap((row) => Array.isArray(row?.cells) ? row.cells : [])
+      .map(extractPlainText)
+      .find((text) => text.trim()) ?? "";
+  }
+
+  return extractPlainText(value.content);
+}
+
+function extractFirstMarkdownLine(markdown) {
+  if (typeof markdown !== "string") {
+    return "";
+  }
+
+  const line = markdown
+    .split(/\r?\n/)
+    .find((candidate) => stripMarkdownTitleSyntax(candidate).trim());
+
+  return line ? stripMarkdownTitleSyntax(line) : "";
+}
+
+function stripMarkdownTitleSyntax(value) {
+  return String(value)
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^\[[ xX]\]\s+/, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`~]/g, "");
 }
 
 function normalizeAppTheme(value, fallback = DEFAULT_APP_THEME) {
@@ -419,6 +634,10 @@ function normalizeEditorPreferences(
       source.editorFontFamily,
       fallbackSource.editorFontFamily,
     ),
+    showTableOfContents:
+      typeof source.showTableOfContents === "boolean"
+        ? source.showTableOfContents
+        : Boolean(fallbackSource.showTableOfContents),
   };
 }
 

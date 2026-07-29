@@ -12,8 +12,8 @@ NotePane은 macOS용 local-first note pane 앱입니다. 하나의 창에서 ses
 - tab을 창 밖으로 drag하면 별도 window로 detach
 - detached sticky note는 header title을 직접 수정하고 다시 tabs로 dock 가능
 - session tab 더블클릭으로 이름 변경
-- tab session header 우측에서 Light/Dark direct switch와 공유 아이콘 기반 PNG/PDF export 제어
-- macOS app menu의 Preferences 또는 `Command + ,`로 session tab 문구색 설정
+- 공유 아이콘 기반 PNG/PDF export 제어
+- session tab 우클릭 메뉴에서 tab 색상 설정
 - Notion식 Light/Dark 모드
 - note pane style shell
 - 로컬 JSON 자동 저장
@@ -81,7 +81,7 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - Drag tab out to detach it into a sticky window
 - Dock a detached sticky window back into tab sessions
 - Sticky mode arranges sessions as compact sticky-note windows
-- Sticky mode supports per-session pastel background color and opacity from the header
+- Sticky mode supports per-session pastel background color and opacity from the header settings modal
 - Sticky color/opacity carries back to the sidebar session tab color in Tab session mode
 - Dashed bottom button for new sidebar sessions
 - `Command + T` new sidebar session tab
@@ -89,11 +89,11 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - `Command + Option + Left/Right` previous/next sidebar session switching with wrap-around
 - `Command + W` closes the current tab in tab session mode
 - `Command + Shift + M` mode switch
-- `Command + Shift + L` Light/Dark switch
+- `Command + Shift + L` Light/Dark toggle
 - `Command + Shift + E` export menu
 - Double-click session rename
 - Hover-only session delete button
-- Sun/Moon Light/Dark app-wide theme switch
+- Light/Dark app-wide theme via sidebar Preferences or `Command + Shift + L`
 - Sidebar tab text color customization
 - Tab color wheel
 - Color brightness/value slider that stays unchanged when the wheel color changes
@@ -109,11 +109,11 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - Tab session mode에서는 상단 header에 제목을 두지 않습니다.
 - Sticky mode에서는 상단 header에서 현재 session title을 직접 수정합니다.
 - Sticky mode로 전환하면 각 session은 작은 sticky note 창으로 정렬됩니다.
-- Sticky mode의 header 색상 버튼에서 해당 sticky note의 pastel color/opacity를 설정합니다.
-- header 좌측은 sidebar toggle 또는 sticky title, 중앙은 drag strip, 우측은 mode switch와 export control을 둡니다.
-- Light/Dark 전환은 tab session mode header 우측의 sun/moon switch로 바로 처리합니다.
-- Sticky mode에서는 Light/Dark switch를 숨기고 header를 더 작게 유지합니다.
-- tab 문구색 설정은 macOS app menu Preferences 또는 `Command + ,`로 여는 Preferences panel에서만 처리합니다.
+- Sticky mode의 header 설정 버튼에서 해당 sticky note의 pastel color/opacity와 editor 설정을 조정합니다.
+- header 좌측은 sidebar toggle 또는 sticky title, 중앙은 drag strip, 우측은 export 또는 sticky settings control을 둡니다.
+- Light/Dark 전환은 sidebar footer의 Preferences, macOS app menu Preferences, 또는 `Command + Shift + L`로 처리합니다.
+- Sticky mode에서는 header를 더 작게 유지합니다.
+- tab 색상 설정은 각 session tab 우클릭 메뉴의 Color 옵션에서 처리합니다.
 - export는 header 우측의 공유 아이콘 한 개에서 PNG/PDF를 선택합니다.
 - drag 영역은 상단 sticky header로 제한합니다.
 - editor 영역은 `-webkit-app-region: no-drag`로 유지합니다.

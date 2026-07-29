@@ -315,12 +315,14 @@ function broadcastEditorPreferences(editorPreferences) {
 
 function broadcastNotesChanged(payload = {}) {
   const notes = store.listNotes();
+  const trash = store.listTrash();
   for (const entry of windows.values()) {
     const { window } = entry;
     if (!window.isDestroyed()) {
       const activeNote = resolveActiveNoteForWindow(entry, payload.activeNote);
       window.webContents.send("notes:changed", {
         notes,
+        trash,
         activeNote,
       });
     }
@@ -375,6 +377,7 @@ function ensureTabsWindow(activeNoteId) {
     primaryEntry.window.setTitle(note.title);
     primaryEntry.window.webContents.send("notes:changed", {
       notes: store.listNotes(),
+      trash: store.listTrash(),
       activeNote: note,
     });
     primaryEntry.window.show();
@@ -738,6 +741,10 @@ function installIpcHandlers() {
     return store.listNotes();
   });
 
+  ipcMain.handle("trash:list", () => {
+    return store.listTrash();
+  });
+
   ipcMain.handle("notes:create", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const layoutMode = store.getLayoutMode();
@@ -757,6 +764,7 @@ function installIpcHandlers() {
       return {
         deleted: false,
         notes: store.listNotes(),
+        trash: store.listTrash(),
         activeNote: null,
       };
     }
@@ -774,10 +782,12 @@ function installIpcHandlers() {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window && nextActiveNote) {
       const entry = windows.get(window.id);
-      if (entry && noteId === currentNoteId) {
+      if (entry?.primary && noteId === currentNoteId) {
         entry.noteId = nextActiveNote.id;
+        window.setTitle(nextActiveNote.title);
+      } else if (entry?.noteId !== noteId) {
+        window.setTitle(nextActiveNote.title);
       }
-      window.setTitle(nextActiveNote.title);
     }
 
     for (const entry of getEntriesForNote(noteId)) {
@@ -789,6 +799,58 @@ function installIpcHandlers() {
     return {
       ...result,
       activeNote: nextActiveNote,
+    };
+  });
+
+  ipcMain.handle("trash:restore", (event, noteId) => {
+    const result = typeof noteId === "string"
+      ? store.restoreNote(noteId)
+      : {
+          restored: false,
+          note: null,
+          notes: store.listNotes(),
+          trash: store.listTrash(),
+          activeNote: null,
+        };
+
+    const restoredNote = result.restored ? result.note : null;
+    const currentNoteId = getNoteIdForWebContents(event.sender);
+    const activeNote =
+      (currentNoteId ? store.getNote(currentNoteId) : null) ??
+      getMainTabsNote() ??
+      restoredNote;
+
+    if (restoredNote) {
+      syncWindowsForLayoutMode(activeNote?.id, {
+        reopenClosedStickyWindows: true,
+      });
+    }
+    broadcastNotesChanged({ activeNote });
+
+    return {
+      ...result,
+      activeNote,
+    };
+  });
+
+  ipcMain.handle("trash:purge", (event, noteId) => {
+    const result = typeof noteId === "string"
+      ? store.purgeNote(noteId)
+      : {
+          deleted: false,
+          notes: store.listNotes(),
+          trash: store.listTrash(),
+        };
+    const currentNoteId = getNoteIdForWebContents(event.sender);
+    const activeNote =
+      (currentNoteId ? store.getNote(currentNoteId) : null) ??
+      getMainTabsNote();
+
+    broadcastNotesChanged({ activeNote });
+
+    return {
+      ...result,
+      activeNote,
     };
   });
 
@@ -870,11 +932,22 @@ function installIpcHandlers() {
       return null;
     }
 
-    return store.updateContent({
+    const previousTitle = store.getNote(resolvedNoteId)?.title;
+    const note = store.updateContent({
       noteId: resolvedNoteId,
       blocksJSON: payload?.blocksJSON,
       markdown: payload?.markdown,
     });
+
+    if (note && note.title !== previousTitle) {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window && note.title) {
+        window.setTitle(note.title);
+      }
+      broadcastNotesChanged({ activeNote: note });
+    }
+
+    return note;
   });
 
   ipcMain.handle("notes:update-appearance", (event, payload) => {
@@ -886,9 +959,8 @@ function installIpcHandlers() {
 
     const note = store.updateAppearance(resolvedNoteId, {
       title: payload?.title,
+      titleManuallyEdited: payload?.titleManuallyEdited,
       theme: payload?.theme,
-      editorFontScale: payload?.editorFontScale,
-      editorFontFamily: payload?.editorFontFamily,
     });
 
     const window = BrowserWindow.fromWebContents(event.sender);
@@ -910,32 +982,22 @@ function installIpcHandlers() {
     }
 
     const title = sanitizeFileName(payload?.title, "notepane-note");
-    const type = payload?.type === "pdf" ? "pdf" : "png";
-
-    if (type === "pdf") {
-      const buffer = await window.webContents.printToPDF({
-        printBackground: true,
-        preferCSSPageSize: true,
-        margins: { marginType: "none" },
-      });
-      return saveBuffer({
-        window,
-        buffer,
-        defaultName: `${title}.pdf`,
-        dialogTitle: "Export note as PDF",
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
-      });
+    const type = payload?.type ?? "pdf";
+    if (type !== "pdf") {
+      throw new Error("Only PDF export is supported.");
     }
 
-    const buffer = payload?.dataUrl
-      ? pngBufferFromDataUrl(payload.dataUrl)
-      : await capturePngForExport(window, payload?.rect);
+    const buffer = await window.webContents.printToPDF({
+      printBackground: true,
+      preferCSSPageSize: true,
+      margins: { marginType: "none" },
+    });
     return saveBuffer({
       window,
       buffer,
-      defaultName: `${title}.png`,
-      dialogTitle: "Export note as PNG",
-      filters: [{ name: "PNG image", extensions: ["png"] }],
+      defaultName: `${title}.pdf`,
+      dialogTitle: "Export note as PDF",
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
   });
 
@@ -997,85 +1059,6 @@ function installIpcHandlers() {
     );
     return window.getBounds();
   });
-}
-
-async function capturePngForExport(window, rect) {
-  const captureRect = normalizeCaptureRect(rect);
-  if (!captureRect) {
-    const image = await window.webContents.capturePage();
-    return image.toPNG();
-  }
-
-  const originalBounds = window.getBounds();
-  const [originalContentWidth, originalContentHeight] = window.getContentSize();
-  const targetContentWidth = Math.max(
-    originalContentWidth,
-    captureRect.x + captureRect.width,
-  );
-  const targetContentHeight = Math.max(
-    originalContentHeight,
-    captureRect.y + captureRect.height,
-  );
-
-  try {
-    if (
-      targetContentWidth !== originalContentWidth ||
-      targetContentHeight !== originalContentHeight
-    ) {
-      window.setContentSize(targetContentWidth, targetContentHeight, false);
-      await waitForRendererFrame(window);
-    }
-
-    const image = await window.webContents.capturePage(captureRect);
-    return image.toPNG();
-  } finally {
-    if (!window.isDestroyed()) {
-      window.setBounds(originalBounds, false);
-    }
-  }
-}
-
-async function waitForRendererFrame(window) {
-  if (!window || window.isDestroyed()) {
-    return;
-  }
-
-  try {
-    await window.webContents.executeJavaScript(
-      "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-      true,
-    );
-  } catch {
-    // Best-effort repaint wait only.
-  }
-}
-
-function pngBufferFromDataUrl(dataUrl) {
-  if (typeof dataUrl !== "string") {
-    throw new Error("Invalid PNG export payload.");
-  }
-
-  const match = dataUrl.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
-  if (!match) {
-    throw new Error("Invalid PNG export payload.");
-  }
-
-  return Buffer.from(match[1], "base64");
-}
-
-function normalizeCaptureRect(value) {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-
-  const rect = {
-    x: Math.max(0, Math.round(Number(value.x))),
-    y: Math.max(0, Math.round(Number(value.y))),
-    width: Math.max(1, Math.round(Number(value.width))),
-    height: Math.max(1, Math.round(Number(value.height))),
-  };
-
-  return Object.values(rect).every(Number.isFinite) ? rect : undefined;
 }
 
 async function saveBuffer({ window, buffer, defaultName, dialogTitle, filters }) {

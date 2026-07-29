@@ -18,6 +18,7 @@ test("creates, saves, and reloads a local note", () => {
   store.updateBounds(note.id, { x: 25, y: 50, width: 1000, height: 800 });
   store.updateAppearance(note.id, {
     title: "  Project note  ",
+    titleManuallyEdited: true,
     theme: {
       mode: "dark",
       tabBackgroundColor: "#B9E4FF",
@@ -32,6 +33,7 @@ test("creates, saves, and reloads a local note", () => {
   const reloaded = reloadedStore.getNote(note.id);
 
   assert.equal(reloaded.title, "Project note");
+  assert.equal(reloaded.titleManuallyEdited, true);
   assert.equal(reloaded.markdown, "Saved");
   assert.match(reloaded.blocksJSON, /Saved/);
   assert.deepEqual(reloaded.bounds, { x: 25, y: 50, width: 1000, height: 800 });
@@ -121,7 +123,8 @@ test("normalizes invalid blocks JSON and clamps window bounds", () => {
     },
   });
 
-  assert.equal(store.getNote(note.id).title, "Untitled");
+  assert.equal(store.getNote(note.id).title, "Fallback");
+  assert.equal(store.getNote(note.id).titleManuallyEdited, false);
   assert.deepEqual(store.getNote(note.id).theme, {
     tabTextColor: null,
     tabTextOpacity: 1,
@@ -131,6 +134,53 @@ test("normalizes invalid blocks JSON and clamps window bounds", () => {
   assert.deepEqual(store.getAppTheme(), {
     mode: "light",
   });
+});
+
+test("derives note titles from content until the title is manually edited", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+  const note = store.createNote({ width: 900, height: 700 });
+  const longTitle = "Automatic title should be sliced after the configured title length";
+
+  assert.equal(note.title, "Untitled");
+  assert.equal(note.titleManuallyEdited, false);
+
+  store.updateContent({
+    noteId: note.id,
+    blocksJSON: JSON.stringify([
+      { type: "paragraph" },
+      { type: "heading", content: longTitle },
+    ]),
+    markdown: "",
+  });
+  assert.equal(store.getNote(note.id).title, longTitle.slice(0, 48));
+
+  store.updateContent({
+    noteId: note.id,
+    blocksJSON: JSON.stringify([{ type: "paragraph" }]),
+    markdown: "",
+  });
+  assert.equal(store.getNote(note.id).title, "Untitled");
+
+  store.updateAppearance(note.id, {
+    title: "Manual title",
+    titleManuallyEdited: true,
+    theme: {},
+  });
+  store.updateContent({
+    noteId: note.id,
+    blocksJSON: JSON.stringify([{ type: "paragraph", content: "Changed body" }]),
+    markdown: "Changed body",
+  });
+  assert.equal(store.getNote(note.id).title, "Manual title");
+  assert.equal(store.getNote(note.id).titleManuallyEdited, true);
+
+  store.updateAppearance(note.id, {
+    title: "   ",
+    titleManuallyEdited: true,
+    theme: {},
+  });
+  assert.equal(store.getNote(note.id).title, "Manual title");
 });
 
 test("updates the global app theme from dark back to light", () => {
@@ -176,7 +226,7 @@ test("detaches and reattaches notes for tab/window workflows", () => {
   assert.equal(store.setDetached(note.id, false).detached, false);
 });
 
-test("updates and persists editor typography per note", () => {
+test("keeps editor typography global instead of updating per note appearance", () => {
   const directory = createTemporaryDirectory();
   const store = new StickyStore(directory);
   const firstNote = store.createNote({ width: 900, height: 700 });
@@ -198,10 +248,10 @@ test("updates and persists editor typography per note", () => {
 
   const reloadedStore = new StickyStore(directory);
 
-  assert.equal(reloadedStore.getNote(firstNote.id).editorFontScale, 9);
-  assert.equal(reloadedStore.getNote(secondNote.id).editorFontScale, 0.38);
-  assert.equal(reloadedStore.getNote(firstNote.id).editorFontFamily, "local:Pretendard");
-  assert.equal(reloadedStore.getNote(secondNote.id).editorFontFamily, "garamond");
+  assert.equal(reloadedStore.getNote(firstNote.id).editorFontScale, 1);
+  assert.equal(reloadedStore.getNote(secondNote.id).editorFontScale, 1);
+  assert.equal(reloadedStore.getNote(firstNote.id).editorFontFamily, "system");
+  assert.equal(reloadedStore.getNote(secondNote.id).editorFontFamily, "system");
 });
 
 test("updates editor preferences and applies them to new notes", () => {
@@ -211,14 +261,17 @@ test("updates editor preferences and applies them to new notes", () => {
   assert.deepEqual(store.getEditorPreferences(), {
     editorFontScale: 1,
     editorFontFamily: "system",
+    showTableOfContents: false,
   });
 
   assert.deepEqual(store.updateEditorPreferences({
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    showTableOfContents: true,
   }), {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    showTableOfContents: true,
   });
 
   const note = store.createNote({ width: 900, height: 700 });
@@ -229,6 +282,7 @@ test("updates editor preferences and applies them to new notes", () => {
   assert.deepEqual(reloadedStore.getEditorPreferences(), {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    showTableOfContents: true,
   });
 });
 
@@ -332,7 +386,7 @@ test("migrates legacy per-note mode to global app theme", () => {
   });
 });
 
-test("deletes notes while preserving at least one local session", () => {
+test("moves notes to trash, restores them, and preserves at least one session", () => {
   const directory = createTemporaryDirectory();
   const store = new StickyStore(directory);
   const firstNote = store.createNote({ width: 900, height: 700 });
@@ -343,11 +397,35 @@ test("deletes notes while preserving at least one local session", () => {
   assert.equal(deleted.deleted, true);
   assert.equal(deleted.activeNote.id, secondNote.id);
   assert.deepEqual(store.listNotes().map((note) => note.id), [secondNote.id]);
+  assert.equal(store.getNote(firstNote.id), null);
+  assert.deepEqual(store.listTrash().map((note) => note.id), [firstNote.id]);
+  assert.equal(Number.isFinite(store.listTrash()[0].trashedAt), true);
 
   const blocked = store.deleteNote(secondNote.id);
 
   assert.equal(blocked.deleted, false);
   assert.deepEqual(store.listNotes().map((note) => note.id), [secondNote.id]);
+  assert.deepEqual(store.listTrash().map((note) => note.id), [firstNote.id]);
+
+  const restored = store.restoreNote(firstNote.id);
+
+  assert.equal(restored.restored, true);
+  assert.equal(restored.activeNote.id, firstNote.id);
+  assert.equal(restored.note.trashedAt, null);
+  assert.deepEqual(store.listNotes().map((note) => note.id), [
+    firstNote.id,
+    secondNote.id,
+  ]);
+  assert.deepEqual(store.listTrash(), []);
+
+  const deletedAgain = store.deleteNote(firstNote.id);
+  const purged = store.purgeNote(firstNote.id);
+
+  assert.equal(deletedAgain.deleted, true);
+  assert.equal(purged.deleted, true);
+  assert.deepEqual(store.listTrash(), []);
+  assert.deepEqual(store.listNotes().map((note) => note.id), [secondNote.id]);
+  assert.equal(store.restoreNote(firstNote.id).restored, false);
 });
 
 test("backs up a corrupted notes file and starts with an empty state", () => {

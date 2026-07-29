@@ -17,18 +17,21 @@ import "@blocknote/core/fonts/inter.css";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { useCreateBlockNote } from "@blocknote/react";
-import { toPng } from "html-to-image";
+import { TextSelection } from "@tiptap/pm/state";
 import {
-  Columns3,
-  EllipsisVertical,
+  Check,
+  Cog,
+  Copy,
+  Ellipsis,
+  FileDown,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   PanelTopClose,
   Pin,
-  PinOff,
-  SlidersHorizontal,
-  StickyNote,
-  Settings2,
+  RotateCcw,
+  TableOfContents as TableOfContentsIcon,
+  Trash2,
 } from "lucide-react";
 import "./styles.css";
 
@@ -202,6 +205,7 @@ const schema = BlockNoteSchema.create().extend({
 
 const electronApi = window.blocknoteSticky;
 const DEFAULT_TITLE = "Untitled";
+const AUTO_TITLE_MAX_LENGTH = 48;
 const DEFAULT_APP_THEME = {
   mode: "light",
 };
@@ -251,6 +255,7 @@ const DEFAULT_EDITOR_FONT_FAMILY = "system";
 const DEFAULT_EDITOR_PREFERENCES = {
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+  showTableOfContents: false,
 };
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_BUILTIN_FONT_FAMILY_OPTIONS = [
@@ -386,16 +391,21 @@ const SIDEBAR_MIN_WIDTH = 156;
 const SIDEBAR_MAX_WIDTH = 340;
 const SIDEBAR_COLLAPSE_WIDTH = 124;
 const SIDEBAR_COMPACT_WIDTH = 64;
+const EXPORT_TOAST_TIMEOUT_MS = 2600;
+const FONT_SIZE_TOAST_TIMEOUT_MS = 1400;
 
 function App() {
   const [note, setNote] = useState(null);
   const [notes, setNotes] = useState([]);
+  const [trashedNotes, setTrashedNotes] = useState([]);
   const [appTheme, setAppTheme] = useState(DEFAULT_APP_THEME);
   const [layoutMode, setLayoutMode] = useState(DEFAULT_LAYOUT_MODE);
   const [installedFontFamilies, setInstalledFontFamilies] = useState([]);
   const [editorPreferences, setEditorPreferences] = useState(
     DEFAULT_EDITOR_PREFERENCES,
   );
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
 
   useEffect(() => {
     let cancelled = false;
@@ -407,6 +417,7 @@ function App() {
         const previewNote = {
           id: noteId || "browser-preview",
           title: DEFAULT_TITLE,
+          titleManuallyEdited: false,
           blocksJSON: null,
           markdown: "",
           theme: DEFAULT_THEME,
@@ -414,10 +425,12 @@ function App() {
           editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
           editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
           detached: false,
+          trashedAt: null,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
         setNotes([previewNote]);
+        setTrashedNotes([]);
         setNote(previewNote);
         setLayoutMode(DEFAULT_LAYOUT_MODE);
         return;
@@ -429,11 +442,13 @@ function App() {
         loadedAppTheme,
         loadedLayoutMode,
         loadedEditorPreferences,
+        loadedTrashedNotes,
       ] = await Promise.all([
         electronApi.listNotes(),
         electronApi.getAppTheme?.(),
         electronApi.getLayoutMode?.(),
         electronApi.getEditorPreferences?.(),
+        electronApi.listTrash?.(),
       ]);
       const loadedNote = resolvedNoteId
         ? await electronApi.getNote(resolvedNoteId)
@@ -448,6 +463,7 @@ function App() {
           loadedNotes[0] ?? {
             id: "missing-note",
             title: DEFAULT_TITLE,
+            titleManuallyEdited: false,
             blocksJSON: null,
             markdown: "",
             theme: DEFAULT_THEME,
@@ -455,10 +471,12 @@ function App() {
             editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
             editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
             detached: false,
+            trashedAt: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
         setNotes(mergeNotes(loadedNotes, fallbackNote));
+        setTrashedNotes(Array.isArray(loadedTrashedNotes) ? loadedTrashedNotes : []);
         setNote(fallbackNote);
       }
     }
@@ -485,9 +503,13 @@ function App() {
   useEffect(() => {
     return electronApi?.onNotesChanged?.((payload) => {
       const nextNotes = Array.isArray(payload?.notes) ? payload.notes : [];
+      const nextTrashedNotes = Array.isArray(payload?.trash) ? payload.trash : null;
       const activeNote = payload?.activeNote;
 
       setNotes(nextNotes);
+      if (nextTrashedNotes) {
+        setTrashedNotes(nextTrashedNotes);
+      }
       setNote((currentNote) => {
         if (activeNote?.id) {
           return activeNote;
@@ -545,6 +567,7 @@ function App() {
       : {
           id: crypto.randomUUID(),
           title: DEFAULT_TITLE,
+          titleManuallyEdited: false,
           blocksJSON: null,
           markdown: "",
           theme: DEFAULT_THEME,
@@ -552,6 +575,7 @@ function App() {
           editorFontScale: editorPreferences.editorFontScale,
           editorFontFamily: editorPreferences.editorFontFamily,
           detached: false,
+          trashedAt: null,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -568,7 +592,7 @@ function App() {
   }, [editorPreferences]);
 
   const deleteSidebarNote = useCallback(
-    async (noteId) => {
+    async (noteId, noteSnapshot = null) => {
       if (notes.length <= 1) {
         return;
       }
@@ -578,6 +602,9 @@ function App() {
         const nextNotes = Array.isArray(result?.notes)
           ? result.notes
           : await electronApi.listNotes();
+        const nextTrashedNotes = Array.isArray(result?.trash)
+          ? result.trash
+          : await electronApi.listTrash?.();
         const nextNote =
           result?.activeNote ??
           (note?.id === noteId
@@ -585,20 +612,111 @@ function App() {
             : nextNotes.find((candidate) => candidate.id === note?.id));
 
         setNotes(nextNotes);
+        if (Array.isArray(nextTrashedNotes)) {
+          setTrashedNotes(nextTrashedNotes);
+        }
         if (nextNote) {
           setNote(nextNote);
         }
         return;
       }
 
+      const storedDeletedNote = notes.find((candidate) => candidate.id === noteId);
+      const deletedNote =
+        noteSnapshot?.id === noteId
+          ? { ...storedDeletedNote, ...noteSnapshot }
+          : storedDeletedNote;
+      if (!deletedNote) {
+        return;
+      }
       const deletedNoteIndex = notes.findIndex((candidate) => candidate.id === noteId);
       const nextNotes = notes.filter((candidate) => candidate.id !== noteId);
+      const now = Date.now();
+      const trashedNote = {
+        ...deletedNote,
+        alwaysOnTop: false,
+        detached: false,
+        trashedAt: now,
+        updatedAt: now,
+      };
       setNotes(nextNotes);
+      setTrashedNotes((currentTrashedNotes) =>
+        mergeTrashedNotes(currentTrashedNotes, trashedNote),
+      );
       if (note?.id === noteId) {
         setNote(nextNotes[deletedNoteIndex] ?? nextNotes[deletedNoteIndex - 1] ?? null);
       }
     },
     [note, notes],
+  );
+
+  const restoreTrashedNote = useCallback(
+    async (noteId) => {
+      if (electronApi) {
+        const result = await electronApi.restoreNote?.(noteId);
+        const nextNotes = Array.isArray(result?.notes)
+          ? result.notes
+          : await electronApi.listNotes();
+        const nextTrashedNotes = Array.isArray(result?.trash)
+          ? result.trash
+          : await electronApi.listTrash?.();
+        const nextNote = result?.activeNote ?? result?.note ?? nextNotes[0] ?? null;
+
+        setNotes(nextNotes);
+        if (Array.isArray(nextTrashedNotes)) {
+          setTrashedNotes(nextTrashedNotes);
+        }
+        if (nextNote) {
+          setNote(nextNote);
+        }
+        return;
+      }
+
+      const restoredNote = trashedNotes.find((candidate) => candidate.id === noteId);
+      if (!restoredNote) {
+        return;
+      }
+
+      const activeNote = {
+        ...restoredNote,
+        alwaysOnTop: false,
+        detached: false,
+        trashedAt: null,
+        updatedAt: Date.now(),
+      };
+      setTrashedNotes((currentTrashedNotes) =>
+        currentTrashedNotes.filter((candidate) => candidate.id !== noteId),
+      );
+      setNotes((currentNotes) => mergeNotes(currentNotes, activeNote));
+      setNote((currentNote) => currentNote ?? activeNote);
+    },
+    [trashedNotes],
+  );
+
+  const purgeTrashedNote = useCallback(
+    async (noteId) => {
+      if (electronApi) {
+        const result = await electronApi.purgeNote?.(noteId);
+        const nextTrashedNotes = Array.isArray(result?.trash)
+          ? result.trash
+          : await electronApi.listTrash?.();
+        if (Array.isArray(result?.notes)) {
+          setNotes(result.notes);
+        }
+        if (Array.isArray(nextTrashedNotes)) {
+          setTrashedNotes(nextTrashedNotes);
+        }
+        if (result?.activeNote) {
+          setNote(result.activeNote);
+        }
+        return;
+      }
+
+      setTrashedNotes((currentTrashedNotes) =>
+        currentTrashedNotes.filter((candidate) => candidate.id !== noteId),
+      );
+    },
+    [],
   );
 
   const updateNoteInList = useCallback((updatedNote) => {
@@ -666,10 +784,17 @@ function App() {
       key={note.id}
       note={note}
       notes={notes}
+      trashedNotes={trashedNotes}
       appTheme={appTheme}
       layoutMode={layoutMode}
+      isSidebarOpen={isSidebarOpen}
+      setIsSidebarOpen={setIsSidebarOpen}
+      sidebarWidth={sidebarWidth}
+      setSidebarWidth={setSidebarWidth}
       onCreateNote={createSidebarNote}
       onDeleteNote={deleteSidebarNote}
+      onRestoreTrashedNote={restoreTrashedNote}
+      onPurgeTrashedNote={purgeTrashedNote}
       onSelectNote={selectNote}
       onNoteChanged={updateNoteInList}
       onAppThemeModeChanged={updateAppThemeMode}
@@ -686,10 +811,17 @@ function App() {
 function StickyEditor({
   note,
   notes,
+  trashedNotes,
   appTheme,
   layoutMode,
+  isSidebarOpen,
+  setIsSidebarOpen,
+  sidebarWidth,
+  setSidebarWidth,
   onCreateNote,
   onDeleteNote,
+  onRestoreTrashedNote,
+  onPurgeTrashedNote,
   onSelectNote,
   onNoteChanged,
   onAppThemeModeChanged,
@@ -707,6 +839,10 @@ function StickyEditor({
   const initialEditorContent = useMemo(
     () => parsedStoredBlocks ?? (note.seedDemoContent ? DEMO_BLOCKS : EMPTY_BLOCKS),
     [note.seedDemoContent, parsedStoredBlocks],
+  );
+  const initialDisplayTitle = useMemo(
+    () => getNoteDisplayTitle(note, initialEditorContent),
+    [initialEditorContent, note],
   );
 
   const editor = useCreateBlockNote({
@@ -737,10 +873,15 @@ function StickyEditor({
   });
   useBlockNoteFloatingMenuGuard();
 
-  const [title, setTitle] = useState(normalizeTitle(note.title));
+  const [title, setTitle] = useState(initialDisplayTitle);
   const [theme, setTheme] = useState(normalizeTheme(note.theme));
-  const editorFontScale = normalizeEditorFontScale(note.editorFontScale);
-  const editorFontFamily = normalizeEditorFontFamily(note.editorFontFamily);
+  const normalizedEditorPreferences = useMemo(
+    () => normalizeEditorPreferences(editorPreferences),
+    [editorPreferences],
+  );
+  const editorFontScale = normalizedEditorPreferences.editorFontScale;
+  const editorFontFamily = normalizedEditorPreferences.editorFontFamily;
+  const showTableOfContents = normalizedEditorPreferences.showTableOfContents;
   const editorFontOptions = useMemo(
     () => getEditorFontFamilyOptions(installedFontFamilies, editorFontFamily),
     [editorFontFamily, installedFontFamilies],
@@ -760,36 +901,47 @@ function StickyEditor({
   );
   const noteIndex = noteIndexById.get(note.id) ?? 0;
   const stickyAccentColor = resolveStickyAccentColor(theme, noteIndex);
+  const stickyChromeStyle = useMemo(
+    () =>
+      effectiveLayoutMode === "sticky"
+        ? getStickyShellStyle(theme, stickyAccentColor, appThemeMode)
+        : {},
+    [appThemeMode, effectiveLayoutMode, stickyAccentColor, theme],
+  );
   const shellStyle = {
-    ...(effectiveLayoutMode === "sticky"
-      ? getStickyShellStyle(theme, stickyAccentColor)
-      : {}),
+    ...stickyChromeStyle,
     "--editor-font-scale": String(editorFontScale),
     "--editor-font-family": getEditorFontFamilyCss(
       editorFontFamily,
       editorFontOptions,
     ),
   };
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isColorPanelOpen, setIsColorPanelOpen] = useState(false);
   const [isPreferencesWindowOpen, setIsPreferencesWindowOpen] = useState(false);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [preferencesInitialPage, setPreferencesInitialPage] = useState("general");
+  const [isStickySettingsOpen, setIsStickySettingsOpen] = useState(false);
+  const [isStickyTrashConfirmOpen, setIsStickyTrashConfirmOpen] = useState(false);
+  const [sessionTabMenu, setSessionTabMenu] = useState(null);
+  const [sessionColorPanelNoteId, setSessionColorPanelNoteId] = useState(null);
   const [isEditorActive, setIsEditorActive] = useState(false);
-  const [isEditorToolbarExpanded, setIsEditorToolbarExpanded] = useState(false);
-  const [editorFontSizeDraft, setEditorFontSizeDraft] = useState(() =>
-    String(editorFontScaleToSize(editorFontScale)),
-  );
   const [editingSessionId, setEditingSessionId] = useState(null);
   const [draftSessionTitle, setDraftSessionTitle] = useState("");
+  const [isDraftSessionTitleDirty, setIsDraftSessionTitleDirty] = useState(false);
   const [enteringSessionIds, setEnteringSessionIds] = useState(() => new Set());
   const [removingSessionIds, setRemovingSessionIds] = useState(() => new Set());
   const [isPinned, setIsPinned] = useState(Boolean(note.alwaysOnTop));
   const [activeImageBlockId, setActiveImageBlockId] = useState(null);
   const [cropState, setCropState] = useState(null);
-  const [exportMessage, setExportMessage] = useState("");
+  const [exportToast, setExportToast] = useState(null);
+  const [editorFontSizeToast, setEditorFontSizeToast] = useState("");
+  const [tableOfContentsEntries, setTableOfContentsEntries] = useState(() =>
+    extractTableOfContentsEntries(initialEditorContent),
+  );
   const saveTimerRef = useRef(null);
   const appearanceTimerRef = useRef(null);
+  const sessionAppearanceTimerRef = useRef(null);
+  const exportToastTimerRef = useRef(null);
+  const editorFontSizeToastTimerRef = useRef(null);
   const lastSavedBlocksRef = useRef("");
   const isSidebarCompact = effectiveLayoutMode === "tabs" && !isSidebarOpen;
   const sidebarState = isSidebarCompact ? "compact" : "expanded";
@@ -798,6 +950,10 @@ function StickyEditor({
       isSidebarCompact ? SIDEBAR_COMPACT_WIDTH : sidebarWidth
     }px`,
   };
+  const isTableOfContentsVisible =
+    effectiveLayoutMode === "tabs" &&
+    showTableOfContents &&
+    tableOfContentsEntries.length > 0;
 
   useEffect(() => {
     document.body.classList.toggle("theme-dark", appThemeMode === "dark");
@@ -811,22 +967,81 @@ function StickyEditor({
   }, [appThemeMode]);
 
   useEffect(() => {
+    const portalStyleEntries = Object.entries(stickyChromeStyle);
+
+    for (const [name, value] of portalStyleEntries) {
+      document.body.style.setProperty(name, value);
+    }
+
+    return () => {
+      for (const [name] of portalStyleEntries) {
+        document.body.style.removeProperty(name);
+      }
+    };
+  }, [stickyChromeStyle]);
+
+  useEffect(() => {
     setIsPinned(Boolean(note.alwaysOnTop));
   }, [note.alwaysOnTop, note.id]);
 
   useEffect(() => {
-    setTitle(normalizeTitle(note.title));
-  }, [note.id]);
+    setTitle(getNoteDisplayTitle(note, editor.document));
+  }, [
+    editor,
+    note.blocksJSON,
+    note.id,
+    note.markdown,
+    note.title,
+    note.titleManuallyEdited,
+  ]);
 
-  useEffect(() => {
-    setEditorFontSizeDraft(String(editorFontScaleToSize(editorFontScale)));
-  }, [editorFontScale, note.id]);
-
-  useEffect(() => {
-    if (!isEditorActive || effectiveLayoutMode === "sticky") {
-      setIsEditorToolbarExpanded(false);
+  const showExportToast = useCallback((message, tone = "success", options = {}) => {
+    if (exportToastTimerRef.current) {
+      window.clearTimeout(exportToastTimerRef.current);
+      exportToastTimerRef.current = null;
     }
-  }, [effectiveLayoutMode, isEditorActive, note.id]);
+
+    setExportToast({ message, tone });
+
+    const timeout = options.timeout ?? EXPORT_TOAST_TIMEOUT_MS;
+    if (timeout > 0) {
+      exportToastTimerRef.current = window.setTimeout(() => {
+        setExportToast(null);
+        exportToastTimerRef.current = null;
+      }, timeout);
+    }
+  }, []);
+
+  const hideExportToast = useCallback(() => {
+    if (exportToastTimerRef.current) {
+      window.clearTimeout(exportToastTimerRef.current);
+      exportToastTimerRef.current = null;
+    }
+    setExportToast(null);
+  }, []);
+
+  const showEditorFontSizeToast = useCallback((nextEditorFontScale) => {
+    if (editorFontSizeToastTimerRef.current) {
+      window.clearTimeout(editorFontSizeToastTimerRef.current);
+      editorFontSizeToastTimerRef.current = null;
+    }
+
+    setEditorFontSizeToast(
+      `Font size ${editorFontScaleToSize(nextEditorFontScale)}px`,
+    );
+
+    editorFontSizeToastTimerRef.current = window.setTimeout(() => {
+      setEditorFontSizeToast("");
+      editorFontSizeToastTimerRef.current = null;
+    }, FONT_SIZE_TOAST_TIMEOUT_MS);
+  }, []);
+
+  useEffect(() => {
+    if (effectiveLayoutMode !== "sticky") {
+      setIsStickySettingsOpen(false);
+      setIsStickyTrashConfirmOpen(false);
+    }
+  }, [effectiveLayoutMode, note.id]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -836,14 +1051,14 @@ function StickyEditor({
       }
 
       if (
-        target.closest(".editor-toolbar-toggle") ||
-        target.closest(".editor-typography-control") ||
-        target.closest(".editor-floating-menu")
+        target.closest(".editor-font-setting-control") ||
+        target.closest(".editor-floating-menu") ||
+        target.closest(".session-tab-context-menu")
       ) {
         return;
       }
 
-      setIsEditorToolbarExpanded(false);
+      setSessionTabMenu(null);
 
       if (
         !target.closest("[data-testid='sticky-editor-surface']")
@@ -867,16 +1082,46 @@ function StickyEditor({
       const blocks = editor.tryParseMarkdownToBlocks(note.markdown);
       if (blocks.length > 0) {
         editor.replaceBlocks(editor.document, blocks);
+        setTableOfContentsEntries(extractTableOfContentsEntries(blocks));
       }
     } catch {
-      editor.replaceBlocks(editor.document, [
+      const fallbackBlocks = [
         {
           type: "paragraph",
           content: note.markdown,
         },
-      ]);
+      ];
+      editor.replaceBlocks(editor.document, fallbackBlocks);
+      setTableOfContentsEntries(extractTableOfContentsEntries(fallbackBlocks));
     }
   }, [editor, note.markdown, parsedStoredBlocks]);
+
+  const updateAutomaticTitleFromBlocks = useCallback(
+    (blocks) => {
+      if (isTitleManuallyEdited(note)) {
+        return normalizeTitle(note.title);
+      }
+
+      const nextTitle = deriveAutomaticTitleFromBlocks(blocks);
+      setTitle((currentTitle) => currentTitle === nextTitle ? currentTitle : nextTitle);
+      if (normalizeTitle(note.title) !== nextTitle || note.titleManuallyEdited !== false) {
+        onNoteChanged({
+          ...note,
+          title: nextTitle,
+          titleManuallyEdited: false,
+        });
+      }
+      return nextTitle;
+    },
+    [note, onNoteChanged],
+  );
+
+  const getCurrentNoteSnapshot = useCallback(() => ({
+    ...note,
+    title: getNoteDisplayTitle(note, editor.document),
+    titleManuallyEdited: isTitleManuallyEdited(note),
+    blocksJSON: JSON.stringify(editor.document),
+  }), [editor, note]);
 
   const saveNow = useCallback(async () => {
     const blocksJSON = JSON.stringify(editor.document);
@@ -893,12 +1138,16 @@ function StickyEditor({
       markdown = "";
     }
 
-    await electronApi?.saveContent({
+    const savedNote = await electronApi?.saveContent({
       noteId: note.id,
       blocksJSON,
       markdown,
     });
-  }, [editor, note.id]);
+    if (savedNote?.id) {
+      setTitle(getNoteDisplayTitle(savedNote, editor.document));
+      onNoteChanged(savedNote);
+    }
+  }, [editor, note.id, onNoteChanged]);
 
   const scheduleSave = useCallback(() => {
     if (!electronApi) {
@@ -912,13 +1161,22 @@ function StickyEditor({
     saveTimerRef.current = window.setTimeout(saveNow, 180);
   }, [saveNow]);
 
+  const refreshTableOfContents = useCallback(() => {
+    setTableOfContentsEntries(extractTableOfContentsEntries(editor.document));
+  }, [editor]);
+
+  const handleEditorChange = useCallback(() => {
+    updateAutomaticTitleFromBlocks(editor.document);
+    refreshTableOfContents();
+    scheduleSave();
+  }, [editor, refreshTableOfContents, scheduleSave, updateAutomaticTitleFromBlocks]);
+
+  useEffect(() => {
+    refreshTableOfContents();
+  }, [note.id, refreshTableOfContents]);
+
   const scheduleAppearanceSave = useCallback(
-    (
-      nextTitle,
-      nextTheme,
-      nextEditorFontScale = editorFontScale,
-      nextEditorFontFamily = editorFontFamily,
-    ) => {
+    (nextTitle, nextTheme, options = {}) => {
       if (!electronApi) {
         return;
       }
@@ -928,17 +1186,38 @@ function StickyEditor({
       }
 
       appearanceTimerRef.current = window.setTimeout(() => {
-        void electronApi.updateAppearance({
+        const payload = {
           noteId: note.id,
           title: normalizeTitle(nextTitle),
           theme: normalizeTheme(nextTheme),
-          editorFontScale: normalizeEditorFontScale(nextEditorFontScale),
-          editorFontFamily: normalizeEditorFontFamily(nextEditorFontFamily),
-        });
+        };
+        if (Object.hasOwn(options, "titleManuallyEdited")) {
+          payload.titleManuallyEdited = Boolean(options.titleManuallyEdited);
+        }
+        void electronApi.updateAppearance(payload);
       }, 160);
     },
-    [editorFontFamily, editorFontScale, note.id],
+    [note.id],
   );
+
+  const scheduleSessionAppearanceSave = useCallback((sessionNote, nextTheme) => {
+    if (!electronApi || !sessionNote?.id) {
+      return;
+    }
+
+    if (sessionAppearanceTimerRef.current) {
+      window.clearTimeout(sessionAppearanceTimerRef.current);
+    }
+
+    sessionAppearanceTimerRef.current = window.setTimeout(() => {
+      void electronApi.updateAppearance({
+        noteId: sessionNote.id,
+        title: getNoteDisplayTitle(sessionNote),
+        titleManuallyEdited: isTitleManuallyEdited(sessionNote),
+        theme: normalizeTheme(nextTheme),
+      });
+    }, 160);
+  }, []);
 
   const updateTheme = useCallback(
     (nextTheme) => {
@@ -947,73 +1226,84 @@ function StickyEditor({
       onNoteChanged({
         ...note,
         title: normalizeTitle(title),
+        titleManuallyEdited: isTitleManuallyEdited(note),
         theme: normalizedTheme,
-        editorFontScale,
-        editorFontFamily,
       });
-      scheduleAppearanceSave(
-        title,
-        normalizedTheme,
-        editorFontScale,
-        editorFontFamily,
-      );
+      scheduleAppearanceSave(title, normalizedTheme);
     },
-    [editorFontFamily, editorFontScale, note, onNoteChanged, scheduleAppearanceSave, title],
+    [note, onNoteChanged, scheduleAppearanceSave, title],
+  );
+
+  const updateSessionNoteTheme = useCallback(
+    (sessionNoteId, nextTheme) => {
+      const targetNote =
+        notes.find((sessionNote) => sessionNote.id === sessionNoteId) ??
+        (note.id === sessionNoteId ? note : null);
+
+      if (!targetNote) {
+        return;
+      }
+
+      const normalizedTheme = normalizeTheme(nextTheme);
+      const updatedNote = {
+        ...targetNote,
+        title: getNoteDisplayTitle(
+          targetNote,
+          targetNote.id === note.id ? editor.document : null,
+        ),
+        titleManuallyEdited: isTitleManuallyEdited(targetNote),
+        theme: normalizedTheme,
+      };
+
+      if (targetNote.id === note.id) {
+        setTheme(normalizedTheme);
+      }
+
+      onNoteChanged(updatedNote);
+      scheduleSessionAppearanceSave(updatedNote, normalizedTheme);
+    },
+    [
+      note,
+      notes,
+      editor,
+      onNoteChanged,
+      scheduleSessionAppearanceSave,
+    ],
+  );
+
+  const updateGlobalEditorPreferences = useCallback(
+    (nextEditorPreferences) => {
+      const nextPreferences = normalizeEditorPreferences(
+        nextEditorPreferences,
+        normalizedEditorPreferences,
+      );
+      const didFontSizeChange =
+        nextPreferences.editorFontScale !== editorFontScale;
+
+      void onEditorPreferencesChanged?.(nextPreferences);
+
+      if (didFontSizeChange) {
+        showEditorFontSizeToast(nextPreferences.editorFontScale);
+      }
+    },
+    [
+      editorFontScale,
+      normalizedEditorPreferences,
+      onEditorPreferencesChanged,
+      showEditorFontSizeToast,
+    ],
   );
 
   const updateEditorFontScale = useCallback(
     (nextEditorFontScale) => {
       const normalizedEditorFontScale = normalizeEditorFontScale(nextEditorFontScale);
-      setEditorFontSizeDraft(String(editorFontScaleToSize(normalizedEditorFontScale)));
-      onNoteChanged({
-        ...note,
-        title: normalizeTitle(title),
-        theme,
+      updateGlobalEditorPreferences({
+        ...normalizedEditorPreferences,
         editorFontScale: normalizedEditorFontScale,
-        editorFontFamily,
       });
-      scheduleAppearanceSave(
-        title,
-        theme,
-        normalizedEditorFontScale,
-        editorFontFamily,
-      );
     },
-    [editorFontFamily, note, onNoteChanged, scheduleAppearanceSave, theme, title],
+    [normalizedEditorPreferences, updateGlobalEditorPreferences],
   );
-
-  const updateEditorFontFamily = useCallback(
-    (nextEditorFontFamily) => {
-      const normalizedEditorFontFamily = normalizeEditorFontFamily(nextEditorFontFamily);
-      onNoteChanged({
-        ...note,
-        title: normalizeTitle(title),
-        theme,
-        editorFontScale,
-        editorFontFamily: normalizedEditorFontFamily,
-      });
-      scheduleAppearanceSave(
-        title,
-        theme,
-        editorFontScale,
-        normalizedEditorFontFamily,
-      );
-    },
-    [editorFontScale, note, onNoteChanged, scheduleAppearanceSave, theme, title],
-  );
-
-  const updateEditorFontSize = useCallback(
-    (nextEditorFontSize) => {
-      const normalizedEditorFontSize = normalizeEditorFontSize(nextEditorFontSize);
-      setEditorFontSizeDraft(String(normalizedEditorFontSize));
-      updateEditorFontScale(editorFontSizeToScale(normalizedEditorFontSize));
-    },
-    [updateEditorFontScale],
-  );
-
-  const commitEditorFontSizeDraft = useCallback(() => {
-    updateEditorFontSize(editorFontSizeDraft);
-  }, [editorFontSizeDraft, updateEditorFontSize]);
 
   const adjustEditorFontScale = useCallback(
     (direction) => {
@@ -1024,16 +1314,65 @@ function StickyEditor({
     [editorFontScale, updateEditorFontScale],
   );
 
-  const openPreferences = useCallback(() => {
-    setIsExportMenuOpen(false);
+  const selectTableOfContentsEntry = useCallback(
+    (entry) => {
+      const block = findBlockById(editor.document, entry?.id);
+      if (!block) {
+        return;
+      }
+
+      try {
+        editor.focus();
+        editor.setTextCursorPosition(block, "start");
+      } catch {
+        try {
+          editor.setSelection(block, block);
+        } catch {
+          // The scroll target is still useful if this block type rejects selection.
+        }
+      }
+
+      window.requestAnimationFrame(() => {
+        scrollEditorBlockIntoView(entry.id);
+      });
+    },
+    [editor],
+  );
+
+  const openPreferencesPage = useCallback((pageId = "general") => {
+    setPreferencesInitialPage(normalizePreferencePageId(pageId));
     setIsColorPanelOpen(false);
+    setIsStickySettingsOpen(false);
+    setIsStickyTrashConfirmOpen(false);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
     setIsPreferencesWindowOpen(true);
+  }, []);
+
+  const openPreferences = useCallback(() => {
+    openPreferencesPage("general");
+  }, [openPreferencesPage]);
+
+  const openTrashPreferences = useCallback(() => {
+    openPreferencesPage("trash");
+  }, [openPreferencesPage]);
+
+  const openStickySettings = useCallback(() => {
+    setIsColorPanelOpen(false);
+    setIsPreferencesWindowOpen(false);
+    setIsStickyTrashConfirmOpen(false);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
+    setIsStickySettingsOpen(true);
   }, []);
 
   const toggleLayoutMode = useCallback(() => {
     setIsColorPanelOpen(false);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
     setIsPreferencesWindowOpen(false);
-    setIsExportMenuOpen(false);
+    setIsStickySettingsOpen(false);
+    setIsStickyTrashConfirmOpen(false);
     void onLayoutModeChanged(normalizedLayoutMode === "tabs" ? "sticky" : "tabs");
   }, [normalizedLayoutMode, onLayoutModeChanged]);
 
@@ -1051,6 +1390,7 @@ function StickyEditor({
     onNoteChanged({
       ...note,
       title: normalizeTitle(title),
+      titleManuallyEdited: isTitleManuallyEdited(note),
       theme,
       alwaysOnTop: nextPinned,
     });
@@ -1063,6 +1403,7 @@ function StickyEditor({
       onNoteChanged({
         ...note,
         title: normalizeTitle(title),
+        titleManuallyEdited: isTitleManuallyEdited(note),
         theme,
         alwaysOnTop: Boolean(resolvedPinned),
       });
@@ -1071,12 +1412,43 @@ function StickyEditor({
       onNoteChanged({
         ...note,
         title: normalizeTitle(title),
+        titleManuallyEdited: isTitleManuallyEdited(note),
         theme,
         alwaysOnTop: !nextPinned,
       });
-      setExportMessage(error.message || "Pin failed.");
+      showExportToast(error.message || "Pin failed.", "error");
     }
-  }, [isPinned, note, onNoteChanged, theme, title]);
+  }, [isPinned, note, onNoteChanged, showExportToast, theme, title]);
+
+  const exportNote = useCallback(async () => {
+    if (!electronApi) {
+      showExportToast("PDF export is available in the desktop app.", "error");
+      return;
+    }
+
+    showExportToast("Exporting PDF...", "progress", { timeout: 0 });
+    document.body.classList.add("is-exporting");
+    try {
+      await nextAnimationFrame();
+      await nextAnimationFrame();
+      const result = await electronApi?.exportNote({
+        noteId: note.id,
+        title: normalizeTitle(title),
+        type: "pdf",
+      });
+
+      if (result?.canceled) {
+        hideExportToast();
+        return;
+      }
+
+      showExportToast("PDF exported", "success");
+    } catch (error) {
+      showExportToast(error.message || "PDF export failed.", "error");
+    } finally {
+      document.body.classList.remove("is-exporting");
+    }
+  }, [hideExportToast, note.id, showExportToast, title]);
 
   useEffect(() => {
     return electronApi?.onOpenPreferences?.(openPreferences);
@@ -1128,25 +1500,24 @@ function StickyEditor({
 
       if (event.shiftKey && key === "e") {
         event.preventDefault();
-        setIsExportMenuOpen((value) => !value);
         setIsColorPanelOpen(false);
+        setIsStickySettingsOpen(false);
+        setSessionTabMenu(null);
+        setSessionColorPanelNoteId(null);
         setIsPreferencesWindowOpen(false);
+        void exportNote();
         return;
       }
 
       if ((key === "+" || key === "=") && !event.altKey) {
         event.preventDefault();
-        if (isEditorActive && isEditorShortcutTarget(event.target)) {
-          adjustEditorFontScale(1);
-        }
+        adjustEditorFontScale(1);
         return;
       }
 
       if ((key === "-" || key === "_") && !event.altKey) {
         event.preventDefault();
-        if (isEditorActive && isEditorShortcutTarget(event.target)) {
-          adjustEditorFontScale(-1);
-        }
+        adjustEditorFontScale(-1);
         return;
       }
 
@@ -1181,12 +1552,19 @@ function StickyEditor({
     onAttachNote,
     onCreateNote,
     adjustEditorFontScale,
-    isEditorActive,
+    exportNote,
     toggleLayoutMode,
   ]);
 
   useEffect(() => {
-    if (!isColorPanelOpen && !isPreferencesWindowOpen) {
+    if (
+      !isColorPanelOpen &&
+      !isPreferencesWindowOpen &&
+      !isStickySettingsOpen &&
+      !isStickyTrashConfirmOpen &&
+      !sessionTabMenu &&
+      !sessionColorPanelNoteId
+    ) {
       return undefined;
     }
 
@@ -1195,6 +1573,10 @@ function StickyEditor({
         event.preventDefault();
         setIsColorPanelOpen(false);
         setIsPreferencesWindowOpen(false);
+        setIsStickySettingsOpen(false);
+        setIsStickyTrashConfirmOpen(false);
+        setSessionTabMenu(null);
+        setSessionColorPanelNoteId(null);
       }
     };
 
@@ -1202,7 +1584,14 @@ function StickyEditor({
     return () => {
       document.removeEventListener("keydown", handleEscape, true);
     };
-  }, [isColorPanelOpen, isPreferencesWindowOpen]);
+  }, [
+    isColorPanelOpen,
+    isPreferencesWindowOpen,
+    isStickySettingsOpen,
+    isStickyTrashConfirmOpen,
+    sessionColorPanelNoteId,
+    sessionTabMenu,
+  ]);
 
   useEffect(() => {
     const handleEditorKeyDown = (event) => {
@@ -1289,48 +1678,6 @@ function StickyEditor({
       document.removeEventListener("click", handleImageClick, true);
     };
   }, [editor]);
-
-  const exportNote = useCallback(
-    async (type) => {
-      setIsExportMenuOpen(false);
-      setExportMessage("");
-      if (!electronApi) {
-        setExportMessage("Export is available in the desktop app.");
-        return;
-      }
-
-      document.body.classList.add("is-exporting");
-      try {
-        await nextAnimationFrame();
-        await nextAnimationFrame();
-        const rect = getCaptureRect();
-        let dataUrl;
-        if (type === "png") {
-          try {
-            dataUrl = await renderExportPng(rect);
-          } catch {
-            dataUrl = undefined;
-          }
-        }
-        const result = await electronApi?.exportNote({
-          noteId: note.id,
-          title: normalizeTitle(title),
-          type,
-          rect,
-          dataUrl,
-        });
-
-        if (!result?.canceled) {
-          setExportMessage(`Exported ${type.toUpperCase()}`);
-        }
-      } catch (error) {
-        setExportMessage(error.message || "Export failed.");
-      } finally {
-        document.body.classList.remove("is-exporting");
-      }
-    },
-    [note.id, title],
-  );
 
   const downloadActiveImage = useCallback(async () => {
     const block = findBlockById(editor.document, activeImageBlockId);
@@ -1440,6 +1787,58 @@ function StickyEditor({
     [note.id, onSelectNote, saveNow],
   );
 
+  const sessionColorPanelNote = useMemo(
+    () =>
+      visibleSessionNotes.find(
+        (sessionNote) => sessionNote.id === sessionColorPanelNoteId,
+      ) ??
+      notes.find((sessionNote) => sessionNote.id === sessionColorPanelNoteId) ??
+      null,
+    [notes, sessionColorPanelNoteId, visibleSessionNotes],
+  );
+
+  const sessionTabMenuNote = useMemo(
+    () =>
+      visibleSessionNotes.find(
+        (sessionNote) => sessionNote.id === sessionTabMenu?.noteId,
+      ) ??
+      notes.find((sessionNote) => sessionNote.id === sessionTabMenu?.noteId) ??
+      null,
+    [notes, sessionTabMenu, visibleSessionNotes],
+  );
+
+  const getSessionDisplayTitle = useCallback(
+    (sessionNote) =>
+      getNoteDisplayTitle(
+        sessionNote,
+        sessionNote?.id === note.id ? editor.document : null,
+      ),
+    [editor, note.id],
+  );
+
+  const openSessionTabMenu = useCallback((sessionNote, event) => {
+    event.preventDefault();
+    setSessionColorPanelNoteId(null);
+    setIsColorPanelOpen(false);
+    setIsStickySettingsOpen(false);
+    setIsPreferencesWindowOpen(false);
+    setIsStickyTrashConfirmOpen(false);
+    setSessionTabMenu({
+      noteId: sessionNote.id,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }, []);
+
+  const openSessionColorPanel = useCallback((sessionNoteId) => {
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(sessionNoteId);
+    setIsColorPanelOpen(false);
+    setIsStickySettingsOpen(false);
+    setIsPreferencesWindowOpen(false);
+    setIsStickyTrashConfirmOpen(false);
+  }, []);
+
   useEffect(() => {
     const visibleIds = visibleSessionNotes.map((sessionNote) => sessionNote.id);
 
@@ -1475,23 +1874,35 @@ function StickyEditor({
 
   const startSessionRename = useCallback((sessionNote) => {
     setEditingSessionId(sessionNote.id);
-    setDraftSessionTitle(normalizeTitle(sessionNote.title));
-  }, []);
+    setDraftSessionTitle(getSessionDisplayTitle(sessionNote));
+    setIsDraftSessionTitleDirty(false);
+  }, [getSessionDisplayTitle]);
 
   const cancelSessionRename = useCallback(() => {
     setEditingSessionId(null);
     setDraftSessionTitle("");
+    setIsDraftSessionTitleDirty(false);
   }, []);
 
   const commitSessionRename = useCallback(
     async (sessionNote) => {
-      const normalizedTitle = normalizeTitle(draftSessionTitle);
       setEditingSessionId(null);
       setDraftSessionTitle("");
+      setIsDraftSessionTitleDirty(false);
+
+      if (!isDraftSessionTitleDirty) {
+        return;
+      }
+
+      const normalizedTitle = normalizeTitle(
+        draftSessionTitle,
+        getSessionDisplayTitle(sessionNote),
+      );
 
       const updatedNote = {
         ...sessionNote,
         title: normalizedTitle,
+        titleManuallyEdited: true,
       };
 
       if (sessionNote.id === note.id) {
@@ -1499,16 +1910,12 @@ function StickyEditor({
         onNoteChanged({
           ...note,
           title: normalizedTitle,
+          titleManuallyEdited: true,
           theme,
-          editorFontScale,
-          editorFontFamily,
         });
-        scheduleAppearanceSave(
-          normalizedTitle,
-          theme,
-          editorFontScale,
-          editorFontFamily,
-        );
+        scheduleAppearanceSave(normalizedTitle, theme, {
+          titleManuallyEdited: true,
+        });
         return;
       }
 
@@ -1516,15 +1923,14 @@ function StickyEditor({
       await electronApi?.updateAppearance({
         noteId: sessionNote.id,
         title: normalizedTitle,
+        titleManuallyEdited: true,
         theme: normalizeTheme(sessionNote.theme),
-        editorFontScale: normalizeEditorFontScale(sessionNote.editorFontScale),
-        editorFontFamily: normalizeEditorFontFamily(sessionNote.editorFontFamily),
       });
     },
     [
       draftSessionTitle,
-      editorFontFamily,
-      editorFontScale,
+      getSessionDisplayTitle,
+      isDraftSessionTitleDirty,
       note,
       onNoteChanged,
       scheduleAppearanceSave,
@@ -1553,7 +1959,10 @@ function StickyEditor({
       try {
         await delay(SESSION_TAB_EXIT_MS);
         await saveNow();
-        await onDeleteNote(sessionNote.id);
+        await onDeleteNote(
+          sessionNote.id,
+          sessionNote.id === note.id ? getCurrentNoteSnapshot() : sessionNote,
+        );
       } finally {
         setRemovingSessionIds((currentIds) => {
           const nextIds = new Set(currentIds);
@@ -1562,7 +1971,7 @@ function StickyEditor({
         });
       }
     },
-    [notes.length, onDeleteNote, removingSessionIds, saveNow],
+    [getCurrentNoteSnapshot, note.id, notes.length, onDeleteNote, removingSessionIds, saveNow],
   );
 
   const getSessionTabRowClassName = useCallback(
@@ -1618,6 +2027,43 @@ function StickyEditor({
 
     await deleteSessionNote(currentSessionNote);
   }, [deleteSessionNote, effectiveLayoutMode, note.id, visibleSessionNotes]);
+
+  const requestMoveCurrentStickyNoteToTrash = useCallback(() => {
+    if (notes.length <= 1) {
+      showExportToast("At least one session must remain.", "error");
+      return;
+    }
+
+    setIsColorPanelOpen(false);
+    setIsPreferencesWindowOpen(false);
+    setIsStickySettingsOpen(false);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
+    setIsStickyTrashConfirmOpen(true);
+  }, [notes.length, showExportToast]);
+
+  const moveCurrentStickyNoteToTrash = useCallback(async () => {
+    if (notes.length <= 1) {
+      showExportToast("At least one session must remain.", "error");
+      return;
+    }
+
+    setIsStickyTrashConfirmOpen(false);
+    setIsColorPanelOpen(false);
+    setIsPreferencesWindowOpen(false);
+    setIsStickySettingsOpen(false);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
+    await saveNow();
+    await onDeleteNote(note.id, getCurrentNoteSnapshot());
+  }, [
+    getCurrentNoteSnapshot,
+    note.id,
+    notes.length,
+    onDeleteNote,
+    saveNow,
+    showExportToast,
+  ]);
 
   useEffect(() => {
     const handleSessionShortcut = (event) => {
@@ -1787,6 +2233,15 @@ function StickyEditor({
       if (appearanceTimerRef.current) {
         window.clearTimeout(appearanceTimerRef.current);
       }
+      if (sessionAppearanceTimerRef.current) {
+        window.clearTimeout(sessionAppearanceTimerRef.current);
+      }
+      if (exportToastTimerRef.current) {
+        window.clearTimeout(exportToastTimerRef.current);
+      }
+      if (editorFontSizeToastTimerRef.current) {
+        window.clearTimeout(editorFontSizeToastTimerRef.current);
+      }
     };
   }, []);
 
@@ -1806,6 +2261,37 @@ function StickyEditor({
       >
         <div className="sticky-drag-strip" aria-hidden="true" />
         <div className="sticky-header-actions" aria-label="Sticky controls">
+          {effectiveLayoutMode === "sticky" && (
+            <>
+              <div className="sticky-header-action-list">
+                <StickyPinButton
+                  isPinned={isPinned}
+                  onClick={() => void togglePin()}
+                />
+                <ExportPdfButton onClick={() => void exportNote()} />
+                <LayoutModeSwitch
+                  mode={normalizedLayoutMode}
+                  compact
+                  onChange={toggleLayoutMode}
+                />
+                <StickySettingsButton
+                  active={isStickySettingsOpen}
+                  onClick={openStickySettings}
+                />
+                <StickyTrashButton
+                  onClick={requestMoveCurrentStickyNoteToTrash}
+                />
+              </div>
+              <div className="sticky-header-action-preview" aria-hidden="true">
+                {isPinned && (
+                  <span className="sticky-pin-status">
+                    <PinIcon pinned={isPinned} />
+                  </span>
+                )}
+                <EllipsisIcon />
+              </div>
+            </>
+          )}
           {note.detached && normalizedLayoutMode === "tabs" && (
             <button
               type="button"
@@ -1878,7 +2364,10 @@ function StickyEditor({
                           autoFocus
                           spellCheck={false}
                           onFocus={(event) => event.target.select()}
-                          onChange={(event) => setDraftSessionTitle(event.target.value)}
+                          onChange={(event) => {
+                            setDraftSessionTitle(event.target.value);
+                            setIsDraftSessionTitleDirty(true);
+                          }}
                           onBlur={() => void commitSessionRename(sessionNote)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
@@ -1903,61 +2392,89 @@ function StickyEditor({
                         noteIndexById.get(sessionNote.id) ?? index,
                       )}
                       draggable={normalizedLayoutMode === "tabs"}
+                      onContextMenu={(event) =>
+                        openSessionTabMenu(sessionNote, event)
+                      }
                       onDragStart={(event) => {
                         event.dataTransfer?.setData("application/x-notepane-note", sessionNote.id);
                         event.dataTransfer.effectAllowed = "move";
                       }}
                       onDragEnd={(event) => void detachSessionNote(sessionNote, event)}
                     >
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={sessionNote.id === note.id}
-                        className="session-tab-button has-tooltip"
-                        data-tooltip={`Open ${normalizeTitle(sessionNote.title)} · ${getSessionShortcutLabel(index)}`}
-                        onMouseDown={preventFocusLoss}
-                        onClick={() => void selectSidebarNote(sessionNote.id)}
-                        onDoubleClick={(event) => {
-                          event.preventDefault();
-                          startSessionRename(sessionNote);
-                        }}
-                      >
-                        <span className="session-dot">{index + 1}</span>
-                        <span className="session-name">
-                          {normalizeTitle(sessionNote.title)}
-                        </span>
-                      </button>
-                      <span className="session-tab-trailing">
-                        {index < 9 && (
-                          <span
-                            className="session-shortcut"
-                            aria-label={`Shortcut ${getSessionShortcutLabel(index)}`}
-                          >
-                            {getSessionShortcutLabel(index)}
-                          </span>
-                        )}
+                      {isSidebarCompact ? (
                         <button
                           type="button"
-                          className="session-delete-button has-tooltip"
-                          aria-label={`Delete session ${normalizeTitle(sessionNote.title)}`}
-                          disabled={notes.length <= 1}
-                          data-tooltip={
-                            sessionNote.id === note.id
-                              ? `Close current tab · ${getShortcutLabel("W")}`
-                              : "Delete session"
-                          }
-                          onMouseDown={(event) => {
-                            preventFocusLoss(event);
-                            event.stopPropagation();
-                          }}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void deleteSessionNote(sessionNote);
+                          role="tab"
+                          aria-selected={sessionNote.id === note.id}
+                          className="session-tab-button has-tooltip"
+                          data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
+                          onMouseDown={preventFocusLoss}
+                          onClick={() => void selectSidebarNote(sessionNote.id)}
+                          onDoubleClick={(event) => {
+                            event.preventDefault();
+                            startSessionRename(sessionNote);
                           }}
                         >
-                          ×
+                          <span className="session-dot">{index + 1}</span>
+                          <span className="session-name">
+                            {getSessionDisplayTitle(sessionNote)}
+                          </span>
                         </button>
-                      </span>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="session-index-button session-delete-button has-tooltip"
+                            aria-label={`Delete session ${getSessionDisplayTitle(sessionNote)}`}
+                            disabled={notes.length <= 1}
+                            data-tooltip={
+                              sessionNote.id === note.id
+                                ? `Close current tab · ${getShortcutLabel("W")}`
+                                : "Delete session"
+                            }
+                            onMouseDown={(event) => {
+                              preventFocusLoss(event);
+                              event.stopPropagation();
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteSessionNote(sessionNote);
+                            }}
+                          >
+                            <span className="session-index-label">{index + 1}</span>
+                            <span className="session-index-delete" aria-hidden="true">
+                              ×
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={sessionNote.id === note.id}
+                            className="session-tab-button has-tooltip"
+                            data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
+                            onMouseDown={preventFocusLoss}
+                            onClick={() => void selectSidebarNote(sessionNote.id)}
+                            onDoubleClick={(event) => {
+                              event.preventDefault();
+                              startSessionRename(sessionNote);
+                            }}
+                          >
+                            <span className="session-name">
+                              {getSessionDisplayTitle(sessionNote)}
+                            </span>
+                          </button>
+                          <span className="session-tab-trailing">
+                            {index < 9 && (
+                              <span
+                                className="session-shortcut"
+                                aria-label={`Shortcut ${getSessionShortcutLabel(index)}`}
+                              >
+                                {getSessionShortcutLabel(index)}
+                              </span>
+                            )}
+                          </span>
+                        </>
+                      )}
                     </div>
                   ),
                 )}
@@ -1979,17 +2496,16 @@ function StickyEditor({
               data-testid="session-sidebar-footer"
               aria-label="Session sidebar controls"
             >
-              <div className="session-sidebar-footer-actions">
-                <HeaderModeSwitch
-                  mode={appThemeMode}
-                  onChange={onAppThemeModeChanged}
-                />
+              <div className="session-sidebar-footer-row">
+                <ExportPdfButton onClick={() => void exportNote()} />
                 <PreferencesButton onClick={openPreferences} />
+                <TrashButton onClick={openTrashPreferences} />
+                <LayoutModeSwitch
+                  mode={normalizedLayoutMode}
+                  compact={isSidebarCompact}
+                  onChange={toggleLayoutMode}
+                />
               </div>
-              <LayoutModeSwitch
-                mode={normalizedLayoutMode}
-                onChange={toggleLayoutMode}
-              />
             </div>
             <div
               className="sidebar-resize-handle"
@@ -2001,9 +2517,10 @@ function StickyEditor({
           </aside>
         )}
         <section
-          className="sticky-editor-surface"
+          className={`sticky-editor-surface${isTableOfContentsVisible ? " has-table-of-contents" : ""}`}
           data-testid="sticky-editor-surface"
           data-editor-active={isEditorActive ? "true" : "false"}
+          data-toc-visible={isTableOfContentsVisible ? "true" : "false"}
           onFocusCapture={() => setIsEditorActive(true)}
           onBlurCapture={(event) => {
             const nextTarget = event.relatedTarget;
@@ -2018,80 +2535,37 @@ function StickyEditor({
           onPointerDownCapture={() => setIsEditorActive(true)}
           onMouseDown={focusLastBlockFromEmptySurface}
         >
-          {isEditorActive && effectiveLayoutMode === "sticky" && !isEditorToolbarExpanded ? (
-            <button
-              type="button"
-              className="editor-toolbar-toggle has-tooltip"
-              aria-label="Show editor tools"
-              aria-expanded="false"
-              data-tooltip="Show editor tools"
-              onMouseDown={preventFocusLoss}
-              onClick={() => setIsEditorToolbarExpanded(true)}
+          {editorFontSizeToast && (
+            <div
+              className="editor-font-size-toast"
+              role="status"
+              aria-live="polite"
             >
-              <EditorToolsIcon />
-            </button>
-          ) : isEditorActive ? (
-            <EditorTypographyControl
-              draftValue={editorFontSizeDraft}
-              fontFamily={editorFontFamily}
-              fontOptions={editorFontOptions}
-              leadingControl={
-                effectiveLayoutMode === "sticky" ? (
-                  <>
-                    <LayoutModeSwitch
-                      mode={normalizedLayoutMode}
-                      onChange={toggleLayoutMode}
-                    />
-                    <button
-                      type="button"
-                      className="sticky-pin-button has-tooltip"
-                      aria-label={isPinned ? "Unpin window" : "Pin window"}
-                      aria-pressed={isPinned}
-                      data-tooltip={`${isPinned ? "Unpin window" : "Pin window"} · ${getShortcutLabel("⇧P")}`}
-                      onMouseDown={preventFocusLoss}
-                      onClick={() => void togglePin()}
-                    >
-                      <PinIcon pinned={isPinned} />
-                    </button>
-                    <button
-                      type="button"
-                      className="sticky-color-button has-tooltip"
-                      aria-label="Sticky color"
-                      data-tooltip={`Sticky color · ${getShortcutLabel(",")}`}
-                      style={{ "--sticky-color-preview": stickyAccentColor }}
-                      onMouseDown={preventFocusLoss}
-                      onClick={() => {
-                        setIsColorPanelOpen((value) => !value);
-                        setIsPreferencesWindowOpen(false);
-                        setIsExportMenuOpen(false);
-                      }}
-                    >
-                      <PaletteIcon />
-                    </button>
-                  </>
-                ) : null
-              }
-              scale={editorFontScale}
-              onDraftChange={setEditorFontSizeDraft}
-              onCommit={commitEditorFontSizeDraft}
-              onFontFamilyChange={updateEditorFontFamily}
-              onFontSizeChange={updateEditorFontSize}
-            />
-          ) : null}
-          {isExportMenuOpen && (
-            <ExportMenu
-              className="keyboard-export-menu"
-              onExport={exportNote}
+              {editorFontSizeToast}
+            </div>
+          )}
+          {isTableOfContentsVisible && (
+            <TableOfContentsRail
+              entries={tableOfContentsEntries}
+              onSelectEntry={selectTableOfContentsEntry}
             />
           )}
           <BlockNoteView
             editor={editor}
             theme={appThemeMode}
-            onChange={scheduleSave}
+            onChange={handleEditorChange}
             portalElements={{ default: document.body }}
           />
         </section>
       </div>
+      {sessionTabMenu && sessionTabMenuNote && (
+        <SessionTabContextMenu
+          x={sessionTabMenu.x}
+          y={sessionTabMenu.y}
+          sessionNote={sessionTabMenuNote}
+          onOpenColor={() => openSessionColorPanel(sessionTabMenuNote.id)}
+        />
+      )}
       {isColorPanelOpen && (
         <ColorPanel
           theme={theme}
@@ -2103,16 +2577,50 @@ function StickyEditor({
           onClose={() => setIsColorPanelOpen(false)}
         />
       )}
+      {sessionColorPanelNote && (
+        <ColorPanel
+          theme={normalizeTheme(sessionColorPanelNote.theme)}
+          variant="tabs"
+          defaultColor={resolveSessionTabAccentColor(
+            sessionColorPanelNote.theme,
+            resolveStickyAccentColor(
+              sessionColorPanelNote.theme,
+              noteIndexById.get(sessionColorPanelNote.id) ?? 0,
+            ),
+          )}
+          onChange={(nextTheme) =>
+            updateSessionNoteTheme(sessionColorPanelNote.id, nextTheme)
+          }
+          onClose={() => setSessionColorPanelNoteId(null)}
+        />
+      )}
+      {isStickySettingsOpen && (
+        <StickySettingsWindow
+          noteTitle={title}
+          theme={theme}
+          defaultColor={stickyAccentColor}
+          onThemeChange={updateTheme}
+          onClose={() => setIsStickySettingsOpen(false)}
+        />
+      )}
+      {isStickyTrashConfirmOpen && (
+        <StickyTrashConfirmDialog
+          noteTitle={title}
+          onCancel={() => setIsStickyTrashConfirmOpen(false)}
+          onConfirm={() => void moveCurrentStickyNoteToTrash()}
+        />
+      )}
       {isPreferencesWindowOpen && (
         <PreferencesWindow
-          theme={theme}
+          initialPage={preferencesInitialPage}
           appThemeMode={appThemeMode}
-          defaultColor={stickyAccentColor}
           editorPreferences={editorPreferences}
           fontOptions={editorFontOptions}
-          onThemeChange={updateTheme}
+          trashedNotes={trashedNotes}
           onAppThemeModeChange={onAppThemeModeChanged}
-          onEditorPreferencesChange={onEditorPreferencesChanged}
+          onEditorPreferencesChange={updateGlobalEditorPreferences}
+          onRestoreTrashedNote={onRestoreTrashedNote}
+          onPurgeTrashedNote={onPurgeTrashedNote}
           onClose={() => setIsPreferencesWindowOpen(false)}
         />
       )}
@@ -2126,7 +2634,16 @@ function StickyEditor({
           </button>
         </div>
       )}
-      {exportMessage && <div className="sticky-toast">{exportMessage}</div>}
+      {exportToast && (
+        <div
+          className={`sticky-toast sticky-toast-${exportToast.tone}`}
+          role="status"
+          aria-live="polite"
+        >
+          {exportToast.message}
+        </div>
+      )}
+      <AdaptiveTooltipPortal />
       {cropState && (
         <CropDialog
           sourceUrl={cropState.sourceUrl}
@@ -2135,6 +2652,41 @@ function StickyEditor({
         />
       )}
     </main>
+  );
+}
+
+function TableOfContentsRail({ entries, onSelectEntry }) {
+  return (
+    <nav
+      className="editor-table-of-contents"
+      data-testid="editor-toc"
+      aria-label="Table of contents"
+    >
+      <div className="editor-toc-header">
+        <TableOfContentsIcon
+          className="notepane-action-icon notepane-icon-toc"
+          data-icon-tone="sidebar"
+        />
+        <span>Contents</span>
+      </div>
+      <div className="editor-toc-list" role="list">
+        {entries.map((entry) => (
+          <div className="editor-toc-item" role="listitem" key={entry.id}>
+            <button
+              type="button"
+              className="editor-toc-entry"
+              data-heading-level={entry.level}
+              style={{ "--toc-indent": `${(entry.level - 1) * 10}px` }}
+              aria-label={`Jump to ${entry.title}, heading level ${entry.level}`}
+              onMouseDown={preventFocusLoss}
+              onClick={() => onSelectEntry(entry)}
+            >
+              {entry.title}
+            </button>
+          </div>
+        ))}
+      </div>
+    </nav>
   );
 }
 
@@ -2155,8 +2707,8 @@ function ColorSettingsSection({
   const valueAriaTarget = isStickyVariant ? "sticky color" : "session tab color";
   const hsv = useMemo(() => hexToHsv(activeColor), [activeColor]);
   const formattedValues = useMemo(
-    () => formatColorValues(activeColor),
-    [activeColor],
+    () => formatColorValues(activeColor, activeOpacity),
+    [activeColor, activeOpacity],
   );
   const [draftValues, setDraftValues] = useState(() =>
     Object.fromEntries(formattedValues.map((entry) => [entry.label, entry.value])),
@@ -2195,20 +2747,8 @@ function ColorSettingsSection({
     [updateTabTextColor],
   );
 
-  const resetTabTextColor = useCallback(() => {
-    onChange({
-      ...theme,
-      tabTextColor: null,
-      tabTextOpacity: DEFAULT_THEME.tabTextOpacity,
-    });
-  }, [onChange, theme]);
-
   const copyValue = useCallback(async (value) => {
-    try {
-      await navigator.clipboard?.writeText(value);
-    } catch {
-      // Clipboard access depends on runtime permissions.
-    }
+    await writeClipboardText(value);
   }, []);
 
   const applyColorValue = useCallback(
@@ -2330,14 +2870,6 @@ function ColorSettingsSection({
         >
           Eyedropper
         </button>
-        <button
-          type="button"
-          aria-label={isStickyVariant ? "Reset sticky color" : "Reset session tab color"}
-          onMouseDown={preventFocusLoss}
-          onClick={resetTabTextColor}
-        >
-          Reset
-        </button>
       </div>
 
       <div className="color-value-list">
@@ -2358,7 +2890,7 @@ function ColorSettingsSection({
               onMouseDown={preventFocusLoss}
               onClick={() => void copyValue(entry.value)}
             >
-              ⧉
+              <CopyValueIcon />
             </button>
           </div>
         ))}
@@ -2403,6 +2935,16 @@ function EditorPreferencesSection({
     [normalizedEditorPreferences, onEditorPreferencesChange],
   );
 
+  const updateTableOfContentsVisibility = useCallback(
+    (showTableOfContents) => {
+      onEditorPreferencesChange?.({
+        ...normalizedEditorPreferences,
+        showTableOfContents: Boolean(showTableOfContents),
+      });
+    },
+    [normalizedEditorPreferences, onEditorPreferencesChange],
+  );
+
   const updateEditorPreferenceFontSize = useCallback(
     (nextEditorFontSize) => {
       const normalizedEditorFontSize = normalizeEditorFontSize(nextEditorFontSize);
@@ -2420,21 +2962,53 @@ function EditorPreferencesSection({
 
   return (
     <section className="preferences-section preferences-default-editor-section">
-      <div className="preferences-section-title">Default editor</div>
+      <div className="preferences-section-title">Editor</div>
       <div className="preferences-section-description">
-        Used for newly created sessions. Existing sessions keep their own font settings.
+        Font family and size apply to every session tab.
       </div>
-      <EditorTypographyControl
-        className="preferences-typography-control"
-        draftValue={defaultFontSizeDraft}
-        fontFamily={normalizedEditorPreferences.editorFontFamily}
-        fontOptions={fontOptions}
-        scale={normalizedEditorPreferences.editorFontScale}
-        onDraftChange={setDefaultFontSizeDraft}
-        onCommit={commitDefaultFontSizeDraft}
-        onFontFamilyChange={updateEditorPreferenceFontFamily}
-        onFontSizeChange={updateEditorPreferenceFontSize}
-      />
+      <div className="preference-setting-row editor-font-family-setting">
+        <div>
+          <div className="preference-setting-title">Font family</div>
+          <div className="preferences-section-description">
+            Default editor typeface.
+          </div>
+        </div>
+        <EditorFontFamilyControl
+          className="preferences-font-family-control"
+          fontFamily={normalizedEditorPreferences.editorFontFamily}
+          fontOptions={fontOptions}
+          onFontFamilyChange={updateEditorPreferenceFontFamily}
+        />
+      </div>
+      <div className="preference-setting-row editor-font-size-setting">
+        <div>
+          <div className="preference-setting-title">Font size</div>
+          <div className="preferences-section-description">
+            Default editor text size.
+          </div>
+        </div>
+        <EditorFontSizeControl
+          className="preferences-font-size-control"
+          draftValue={defaultFontSizeDraft}
+          scale={normalizedEditorPreferences.editorFontScale}
+          onDraftChange={setDefaultFontSizeDraft}
+          onCommit={commitDefaultFontSizeDraft}
+          onFontSizeChange={updateEditorPreferenceFontSize}
+        />
+      </div>
+      <div className="preference-setting-row">
+        <div>
+          <div className="preference-setting-title">Table of contents</div>
+          <div className="preferences-section-description">
+            Show the right rail from heading levels in tab mode.
+          </div>
+        </div>
+        <PreferenceToggleSwitch
+          checked={normalizedEditorPreferences.showTableOfContents}
+          ariaLabel="Show table of contents"
+          onChange={updateTableOfContentsVisibility}
+        />
+      </div>
     </section>
   );
 }
@@ -2467,6 +3041,133 @@ function KeyboardShortcutsSection() {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function TrashPreferencesSection({
+  trashedNotes = [],
+  onRestoreNote,
+  onPurgeNote,
+}) {
+  const [pendingPurgeNote, setPendingPurgeNote] = useState(null);
+  const visibleTrashedNotes = Array.isArray(trashedNotes) ? trashedNotes : [];
+
+  useEffect(() => {
+    if (
+      pendingPurgeNote &&
+      !visibleTrashedNotes.some((note) => note.id === pendingPurgeNote.id)
+    ) {
+      setPendingPurgeNote(null);
+    }
+  }, [pendingPurgeNote, visibleTrashedNotes]);
+
+  const confirmPurgeNote = pendingPurgeNote
+    ? {
+        ...pendingPurgeNote,
+        title: getNoteDisplayTitle(pendingPurgeNote),
+      }
+    : null;
+
+  return (
+    <section className="preferences-section preferences-trash-section">
+      <div className="preferences-section-title">Trash</div>
+      <div className="preferences-section-description">
+        Deleted sessions are hidden from tabs and sticky windows until restored.
+      </div>
+      {visibleTrashedNotes.length === 0 ? (
+        <div className="trash-empty-state" role="status">
+          Trash is empty.
+        </div>
+      ) : (
+        <div className="trash-note-list" role="list" aria-label="Trash notes">
+          {visibleTrashedNotes.map((trashNote) => {
+            const title = getNoteDisplayTitle(trashNote);
+            return (
+              <div className="trash-note-row" role="listitem" key={trashNote.id}>
+                <div className="trash-note-meta">
+                  <div className="trash-note-title">{title}</div>
+                  <div className="trash-note-date">
+                    {formatTrashTimestamp(trashNote.trashedAt)}
+                  </div>
+                </div>
+                <div className="trash-note-actions">
+                  <button
+                    type="button"
+                    className="trash-action-button"
+                    aria-label={`Restore ${title}`}
+                    onMouseDown={preventFocusLoss}
+                    onClick={() => void onRestoreNote?.(trashNote.id)}
+                  >
+                    <RestoreNoteIcon />
+                    <span>Restore</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="trash-action-button trash-action-danger"
+                    aria-label={`Delete permanently ${title}`}
+                    onMouseDown={preventFocusLoss}
+                    onClick={() => setPendingPurgeNote(trashNote)}
+                  >
+                    <PermanentDeleteIcon />
+                    <span>Delete</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {confirmPurgeNote && (
+        <div
+          className="trash-confirm-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPendingPurgeNote(null);
+            }
+          }}
+        >
+          <div
+            className="trash-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete permanently confirmation"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div>
+              <div className="trash-confirm-title">Delete permanently?</div>
+              <div className="trash-confirm-message">
+                This note cannot be recovered after deletion.
+              </div>
+              <div className="trash-confirm-note">{confirmPurgeNote.title}</div>
+            </div>
+            <div className="trash-confirm-actions">
+              <button
+                type="button"
+                className="trash-confirm-button"
+                onMouseDown={preventFocusLoss}
+                onClick={() => setPendingPurgeNote(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="trash-confirm-button trash-confirm-danger"
+                aria-label={`Yes, permanently delete ${confirmPurgeNote.title}`}
+                onMouseDown={preventFocusLoss}
+                onClick={() => {
+                  const noteId = confirmPurgeNote.id;
+                  setPendingPurgeNote(null);
+                  void onPurgeNote?.(noteId);
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2519,17 +3220,224 @@ function ColorPanel({
   );
 }
 
-function PreferencesWindow({
+function StickySettingsWindow({
+  noteTitle,
   theme,
-  appThemeMode,
   defaultColor,
-  editorPreferences,
-  fontOptions,
   onThemeChange,
-  onAppThemeModeChange,
-  onEditorPreferencesChange,
   onClose,
 }) {
+  return (
+    <div
+      className="preferences-backdrop sticky-settings-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="preferences-window sticky-settings-window"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sticky settings window"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="preferences-window-header">
+          <div>
+            <div className="preferences-window-title">Sticky settings</div>
+            <div className="preferences-window-subtitle">
+              {normalizeTitle(noteTitle)}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="preferences-close-button"
+            aria-label="Close preferences"
+            onMouseDown={preventFocusLoss}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </header>
+        <div className="sticky-settings-content">
+          <section className="preferences-section preferences-window-section">
+            <div className="preferences-section-title">Appearance</div>
+            <ColorSettingsSection
+              theme={theme}
+              variant="sticky"
+              defaultColor={defaultColor}
+              onChange={onThemeChange}
+            />
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StickyTrashConfirmDialog({
+  noteTitle,
+  onCancel,
+  onConfirm,
+}) {
+  const title = normalizeTitle(noteTitle);
+
+  return (
+    <div
+      className="trash-confirm-backdrop sticky-trash-confirm-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onCancel();
+        }
+      }}
+    >
+      <div
+        className="trash-confirm-dialog sticky-trash-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Move note to trash confirmation"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div>
+          <div className="trash-confirm-title">Move note to trash?</div>
+          <div className="trash-confirm-message">
+            This is different from closing a sticky window. The note will be hidden
+            from tabs and sticky windows until restored from Trash.
+          </div>
+          <div className="trash-confirm-note">{title}</div>
+        </div>
+        <div className="trash-confirm-actions">
+          <button
+            type="button"
+            className="trash-confirm-button"
+            onMouseDown={preventFocusLoss}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="trash-confirm-button trash-confirm-danger"
+            aria-label={`Yes, move ${title} to trash`}
+            onMouseDown={preventFocusLoss}
+            onClick={onConfirm}
+          >
+            Yes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PREFERENCE_PAGES = [
+  { id: "general", label: "General" },
+  { id: "editor", label: "Editor" },
+  { id: "trash", label: "Trash" },
+  { id: "shortcuts", label: "Shortcuts" },
+];
+
+function normalizePreferencePageId(pageId) {
+  return PREFERENCE_PAGES.some((page) => page.id === pageId)
+    ? pageId
+    : "general";
+}
+
+function PreferencesWindow({
+  initialPage = "general",
+  appThemeMode,
+  editorPreferences,
+  fontOptions,
+  trashedNotes,
+  onAppThemeModeChange,
+  onEditorPreferencesChange,
+  onRestoreTrashedNote,
+  onPurgeTrashedNote,
+  onClose,
+}) {
+  const [activePage, setActivePage] = useState(() =>
+    normalizePreferencePageId(initialPage),
+  );
+
+  useEffect(() => {
+    setActivePage(normalizePreferencePageId(initialPage));
+  }, [initialPage]);
+
+  const renderActivePreferencePage = () => {
+    if (activePage === "editor") {
+      return (
+        <div
+          id="preferences-editor"
+          className="preferences-window-section"
+          role="tabpanel"
+          aria-labelledby="preferences-tab-editor"
+        >
+          <EditorPreferencesSection
+            editorPreferences={editorPreferences}
+            fontOptions={fontOptions}
+            onEditorPreferencesChange={onEditorPreferencesChange}
+          />
+        </div>
+      );
+    }
+
+    if (activePage === "trash") {
+      return (
+        <div
+          id="preferences-trash"
+          className="preferences-window-section"
+          role="tabpanel"
+          aria-labelledby="preferences-tab-trash"
+        >
+          <TrashPreferencesSection
+            trashedNotes={trashedNotes}
+            onRestoreNote={onRestoreTrashedNote}
+            onPurgeNote={onPurgeTrashedNote}
+          />
+        </div>
+      );
+    }
+
+    if (activePage === "shortcuts") {
+      return (
+        <div
+          id="preferences-shortcuts"
+          className="preferences-window-section"
+          role="tabpanel"
+          aria-labelledby="preferences-tab-shortcuts"
+        >
+          <KeyboardShortcutsSection />
+        </div>
+      );
+    }
+
+    return (
+      <section
+        id="preferences-general"
+        className="preferences-section preferences-window-section"
+        role="tabpanel"
+        aria-labelledby="preferences-tab-general"
+      >
+        <div className="preferences-section-title">General</div>
+        <div className="preference-setting-row">
+          <div>
+            <div className="preference-setting-title">App theme</div>
+            <div className="preferences-section-description">
+              Light and dark mode are global for the whole app.
+            </div>
+          </div>
+          <HeaderModeSwitch
+            mode={appThemeMode}
+            onChange={onAppThemeModeChange}
+          />
+        </div>
+      </section>
+    );
+  };
+
   return (
     <div
       className="preferences-backdrop"
@@ -2551,7 +3459,7 @@ function PreferencesWindow({
           <div>
             <div className="preferences-window-title">Preferences</div>
             <div className="preferences-window-subtitle">
-              App behavior, editor defaults, appearance, and keyboard commands.
+              App theme, editor typography, trash, and keyboard commands.
             </div>
           </div>
           <button
@@ -2565,58 +3473,28 @@ function PreferencesWindow({
           </button>
         </header>
         <div className="preferences-window-body">
-          <nav className="preferences-window-sidebar" aria-label="Preferences sections">
-            <a href="#preferences-general">General</a>
-            <a href="#preferences-appearance">Appearance</a>
-            <a href="#preferences-editor">Editor</a>
-            <a href="#preferences-shortcuts">Shortcuts</a>
+          <nav
+            className="preferences-window-sidebar"
+            aria-label="Preferences pages"
+            role="tablist"
+          >
+            {PREFERENCE_PAGES.map((page) => (
+              <button
+                id={`preferences-tab-${page.id}`}
+                key={page.id}
+                type="button"
+                role="tab"
+                aria-selected={activePage === page.id}
+                aria-controls={`preferences-${page.id}`}
+                onMouseDown={preventFocusLoss}
+                onClick={() => setActivePage(page.id)}
+              >
+                {page.label}
+              </button>
+            ))}
           </nav>
           <div className="preferences-window-content">
-            <section
-              id="preferences-general"
-              className="preferences-section preferences-window-section"
-            >
-              <div className="preferences-section-title">General</div>
-              <div className="preference-setting-row">
-                <div>
-                  <div className="preference-setting-title">App theme</div>
-                  <div className="preferences-section-description">
-                    Light and dark mode are global for the whole app.
-                  </div>
-                </div>
-                <HeaderModeSwitch
-                  mode={appThemeMode}
-                  onChange={onAppThemeModeChange}
-                />
-              </div>
-            </section>
-            <section
-              id="preferences-appearance"
-              className="preferences-window-section"
-            >
-              <ColorSettingsSection
-                theme={theme}
-                variant="tabs"
-                defaultColor={defaultColor}
-                onChange={onThemeChange}
-              />
-            </section>
-            <div
-              id="preferences-editor"
-              className="preferences-window-section"
-            >
-              <EditorPreferencesSection
-                editorPreferences={editorPreferences}
-                fontOptions={fontOptions}
-                onEditorPreferencesChange={onEditorPreferencesChange}
-              />
-            </div>
-            <div
-              id="preferences-shortcuts"
-              className="preferences-window-section"
-            >
-              <KeyboardShortcutsSection />
-            </div>
+            {renderActivePreferencePage()}
           </div>
         </div>
       </div>
@@ -2646,20 +3524,18 @@ function HeaderModeSwitch({ mode, onChange }) {
   );
 }
 
-function LayoutModeSwitch({ mode, onChange }) {
-  const isSticky = mode === "sticky";
+function PreferenceToggleSwitch({ checked, ariaLabel, onChange }) {
   return (
     <button
       type="button"
-      className="layout-mode-button has-tooltip"
-      aria-label="Layout mode"
-      aria-pressed={isSticky}
-      data-tooltip={`${isSticky ? "Tab sessions mode" : "Sticky windows mode"} · ${getShortcutLabel("⇧M")}`}
+      className="preference-toggle-switch"
+      role="switch"
+      aria-label={ariaLabel}
+      aria-checked={checked ? "true" : "false"}
       onMouseDown={preventFocusLoss}
-      onClick={onChange}
+      onClick={() => onChange?.(!checked)}
     >
-      {isSticky ? <TabsModeIcon /> : <StickyModeIcon />}
-      <span className="layout-mode-label">{isSticky ? "Tabs" : "Sticky"}</span>
+      <span aria-hidden="true">{checked ? "On" : "Off"}</span>
     </button>
   );
 }
@@ -2668,7 +3544,7 @@ function PreferencesButton({ onClick }) {
   return (
     <button
       type="button"
-      className="preferences-icon-button has-tooltip"
+      className="preferences-icon-button settings-icon-button has-tooltip"
       aria-label="Preferences"
       data-tooltip={`Preferences · ${getShortcutLabel(",")}`}
       onMouseDown={preventFocusLoss}
@@ -2679,28 +3555,140 @@ function PreferencesButton({ onClick }) {
   );
 }
 
-function ExportMenu({ className = "", onExport }) {
+function TrashButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      className="trash-icon-button preferences-icon-button has-tooltip"
+      aria-label="Trash"
+      data-tooltip="Trash"
+      onMouseDown={preventFocusLoss}
+      onClick={onClick}
+    >
+      <TrashSidebarIcon />
+    </button>
+  );
+}
+
+function ExportPdfButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      className="export-icon-button preferences-icon-button has-tooltip"
+      aria-label="Export PDF"
+      data-tooltip={`Export PDF · ${getShortcutLabel("⇧E")}`}
+      onMouseDown={preventFocusLoss}
+      onClick={onClick}
+    >
+      <ExportPdfIcon />
+    </button>
+  );
+}
+
+function StickyPinButton({ isPinned = false, onClick }) {
+  return (
+    <button
+      type="button"
+      className="sticky-pin-button has-tooltip"
+      aria-label={isPinned ? "Unpin window" : "Pin window"}
+      aria-pressed={isPinned}
+      data-tooltip={`${isPinned ? "Unpin window" : "Pin window"} · ${getShortcutLabel("⇧P")}`}
+      onMouseDown={preventFocusLoss}
+      onClick={onClick}
+    >
+      <PinIcon pinned={isPinned} />
+    </button>
+  );
+}
+
+function StickySettingsButton({ active = false, onClick }) {
+  return (
+    <button
+      type="button"
+      className="preferences-icon-button sticky-settings-button has-tooltip"
+      aria-label="Sticky settings"
+      aria-pressed={active}
+      data-tooltip="Sticky settings"
+      onMouseDown={preventFocusLoss}
+      onClick={onClick}
+    >
+      <PaletteIcon />
+    </button>
+  );
+}
+
+function StickyTrashButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      className="sticky-trash-button has-tooltip"
+      aria-label="Move note to trash"
+      data-tooltip="Move note to trash"
+      onMouseDown={preventFocusLoss}
+      onClick={onClick}
+    >
+      <TrashSidebarIcon />
+    </button>
+  );
+}
+
+function LayoutModeSwitch({ mode, compact = false, onChange }) {
+  const isSticky = mode === "sticky";
+  const targetMode = isSticky ? "tabs" : "sticky";
+  const targetModeLabel =
+    targetMode === "tabs" ? "Tab sessions mode" : "Sticky windows mode";
+  const actionLabel = `Switch to ${targetModeLabel}`;
+  return (
+    <button
+      type="button"
+      className={`layout-mode-button layout-mode-button-transition${compact ? " is-compact-mode-button" : ""} has-tooltip`}
+      aria-label={actionLabel}
+      aria-pressed={isSticky}
+      data-layout-mode-target={targetMode}
+      data-tooltip={`${actionLabel} · ${getShortcutLabel("⇧M")}`}
+      onMouseDown={preventFocusLoss}
+      onClick={onChange}
+    >
+      <ModeTransitionIcon
+        fromMode={mode}
+        toMode={targetMode}
+        compact={compact}
+      />
+    </button>
+  );
+}
+
+function SessionTabContextMenu({
+  x,
+  y,
+  sessionNote,
+  onOpenColor,
+}) {
+  const colorPreview = resolveSessionTabAccentColor(sessionNote.theme);
+
   return (
     <div
-      className={`export-menu ${className}`.trim()}
+      className="session-tab-context-menu editor-floating-menu"
       role="menu"
-      aria-label="Export format"
+      aria-label={`Session options for ${getNoteDisplayTitle(sessionNote)}`}
+      style={{
+        "--session-tab-menu-x": `${x}px`,
+        "--session-tab-menu-y": `${y}px`,
+      }}
+      onContextMenu={(event) => event.preventDefault()}
     >
       <button
         type="button"
         role="menuitem"
         onMouseDown={preventFocusLoss}
-        onClick={() => void onExport("png")}
+        onClick={onOpenColor}
       >
-        Export as PNG
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        onMouseDown={preventFocusLoss}
-        onClick={() => void onExport("pdf")}
-      >
-        Export as PDF
+        <span
+          className="session-tab-menu-color-swatch"
+          style={{ "--session-tab-menu-color": colorPreview }}
+          aria-hidden="true"
+        />
+        <span>Color...</span>
       </button>
     </div>
   );
@@ -2735,37 +3723,9 @@ function SidebarToggleIcon({ expanded = true }) {
   );
 }
 
-function SettingsIcon() {
-  return (
-    <Settings2
-      className="notepane-action-icon notepane-icon-settings"
-      data-icon-family="system-symbol"
-      data-icon-pack="lucide"
-      data-icon-tone="settings"
-      size={24}
-      strokeWidth={1.9}
-      aria-hidden="true"
-    />
-  );
-}
-
-function EditorToolsIcon() {
-  return (
-    <EllipsisVertical
-      className="notepane-action-icon notepane-icon-editor-tools"
-      data-icon-family="system-symbol"
-      data-icon-pack="lucide"
-      data-icon-tone="tools"
-      size={24}
-      strokeWidth={2}
-      aria-hidden="true"
-    />
-  );
-}
-
 function PaletteIcon() {
   return (
-    <SlidersHorizontal
+    <Palette
       className="notepane-action-icon notepane-icon-palette"
       data-icon-family="system-symbol"
       data-icon-pack="lucide"
@@ -2777,10 +3737,93 @@ function PaletteIcon() {
   );
 }
 
-function PinIcon({ pinned = false }) {
-  const Icon = pinned ? Pin : PinOff;
+function SettingsIcon() {
   return (
-    <Icon
+    <Cog
+      className="notepane-action-icon notepane-icon-settings"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="settings"
+      size={24}
+      strokeWidth={1.9}
+      aria-hidden="true"
+    />
+  );
+}
+
+function ExportPdfIcon() {
+  return (
+    <FileDown
+      className="notepane-action-icon notepane-icon-export"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="export"
+      size={24}
+      strokeWidth={1.9}
+      aria-hidden="true"
+    />
+  );
+}
+
+function CopyValueIcon() {
+  return (
+    <Copy
+      className="notepane-action-icon notepane-icon-copy"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="copy"
+      size={15}
+      strokeWidth={2}
+      aria-hidden="true"
+    />
+  );
+}
+
+function RestoreNoteIcon() {
+  return (
+    <RotateCcw
+      className="notepane-action-icon notepane-icon-restore"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="restore"
+      size={15}
+      strokeWidth={2}
+      aria-hidden="true"
+    />
+  );
+}
+
+function PermanentDeleteIcon() {
+  return (
+    <Trash2
+      className="notepane-action-icon notepane-icon-delete"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="delete"
+      size={15}
+      strokeWidth={2}
+      aria-hidden="true"
+    />
+  );
+}
+
+function TrashSidebarIcon() {
+  return (
+    <Trash2
+      className="notepane-action-icon notepane-icon-trash"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="trash"
+      size={24}
+      strokeWidth={1.9}
+      aria-hidden="true"
+    />
+  );
+}
+
+function PinIcon({ pinned = false }) {
+  return (
+    <Pin
       className="notepane-action-icon notepane-icon-pin"
       data-icon-family="system-symbol"
       data-icon-pack="lucide"
@@ -2793,31 +3836,88 @@ function PinIcon({ pinned = false }) {
   );
 }
 
-function TabsModeIcon() {
+function EllipsisIcon() {
   return (
-    <Columns3
-      className="notepane-action-icon notepane-icon-tabs"
+    <Ellipsis
+      className="notepane-action-icon notepane-icon-ellipsis"
       data-icon-family="system-symbol"
       data-icon-pack="lucide"
-      data-icon-tone="tabs"
-      size={26}
-      strokeWidth={1.8}
+      size={24}
+      strokeWidth={1.9}
       aria-hidden="true"
     />
   );
 }
 
-function StickyModeIcon() {
+function ModeTransitionIcon({ fromMode, toMode, compact = false }) {
+  const FromGlyph = fromMode === "sticky" ? InlineStickyGlyph : InlineTabsGlyph;
+  const ToGlyph = toMode === "sticky" ? InlineStickyGlyph : InlineTabsGlyph;
+
+  if (compact) {
+    return (
+      <svg
+        className="notepane-action-icon notepane-mode-transition-icon lucide lucide-mode-transition"
+        data-icon-family="system-symbol"
+        data-icon-pack="lucide"
+        data-icon-tone={toMode}
+        data-icon-layout="compact"
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <ToGlyph x={2} />
+      </svg>
+    );
+  }
+
   return (
-    <StickyNote
-      className="notepane-action-icon notepane-icon-sticky"
+    <svg
+      className="notepane-action-icon notepane-mode-transition-icon lucide lucide-mode-transition"
       data-icon-family="system-symbol"
       data-icon-pack="lucide"
-      data-icon-tone="sticky"
-      size={26}
-      strokeWidth={1.8}
+      data-icon-tone={toMode}
+      data-icon-layout="transition"
+      width="58"
+      height="24"
+      viewBox="0 0 58 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
-    />
+    >
+      <FromGlyph x={1} />
+      <path className="mode-transition-arrow" d="M26 12h10" />
+      <path className="mode-transition-arrow-head" d="m33 9 3 3-3 3" />
+      <ToGlyph x={40} />
+    </svg>
+  );
+}
+
+function InlineTabsGlyph({ x }) {
+  return (
+    <g className="mode-tabs-glyph" transform={`translate(${x} 0)`}>
+      <rect x="1" y="5" width="18" height="15" rx="2" />
+      <path d="M7 5v15" />
+      <path d="M1 9.5h6" />
+      <path d="M1 14h6" />
+    </g>
+  );
+}
+
+function InlineStickyGlyph({ x }) {
+  return (
+    <g className="mode-sticky-glyph" transform={`translate(${x} 0)`}>
+      <path d="M2 4.5h15v10.2L12.3 20H2V4.5Z" />
+      <path d="M17 14.7h-4.7V20" />
+    </g>
   );
 }
 
@@ -3116,10 +4216,128 @@ function mergeNotes(notes, updatedNote) {
   );
 }
 
-function normalizeTitle(value) {
+function mergeTrashedNotes(notes, updatedNote) {
+  const noteMap = new Map();
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (note?.id) {
+      noteMap.set(note.id, note);
+    }
+  }
+
+  if (updatedNote?.id) {
+    noteMap.set(updatedNote.id, {
+      ...noteMap.get(updatedNote.id),
+      ...updatedNote,
+    });
+  }
+
+  return [...noteMap.values()].sort(
+    (a, b) =>
+      (b.trashedAt ?? 0) - (a.trashedAt ?? 0) ||
+      (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+  );
+}
+
+function normalizeTitle(value, fallback = DEFAULT_TITLE) {
   return typeof value === "string" && value.trim()
     ? value.trim().slice(0, 80)
+    : fallback;
+}
+
+function isTitleManuallyEdited(note) {
+  return note?.titleManuallyEdited === true;
+}
+
+function getNoteDisplayTitle(note, blocks = null) {
+  if (isTitleManuallyEdited(note)) {
+    return normalizeTitle(note?.title);
+  }
+
+  const titleFromBlocks = deriveAutomaticTitleFromBlocks(
+    blocks ?? parseBlocksJSON(note?.blocksJSON),
+  );
+  if (titleFromBlocks !== DEFAULT_TITLE) {
+    return titleFromBlocks;
+  }
+
+  return deriveAutomaticTitleFromMarkdown(note?.markdown);
+}
+
+function deriveAutomaticTitleFromBlocks(blocks) {
+  const titleText = extractFirstBlockTitleText(blocks);
+  return normalizeAutomaticTitleText(titleText);
+}
+
+function deriveAutomaticTitleFromMarkdown(markdown) {
+  if (typeof markdown !== "string") {
+    return DEFAULT_TITLE;
+  }
+
+  const line = markdown
+    .split(/\r?\n/)
+    .find((candidate) => stripMarkdownTitleSyntax(candidate).trim());
+
+  return normalizeAutomaticTitleText(line ? stripMarkdownTitleSyntax(line) : "");
+}
+
+function normalizeAutomaticTitleText(value) {
+  if (typeof value !== "string") {
+    return DEFAULT_TITLE;
+  }
+
+  const normalizedText = value.replace(/\s+/g, " ").trim();
+  return normalizedText
+    ? normalizedText.slice(0, AUTO_TITLE_MAX_LENGTH)
     : DEFAULT_TITLE;
+}
+
+function extractFirstBlockTitleText(blocks) {
+  if (!Array.isArray(blocks)) {
+    return "";
+  }
+
+  for (const block of blocks) {
+    const contentText = extractBlockPlainText(block?.content);
+    if (contentText.trim()) {
+      return contentText;
+    }
+
+    const childText = extractFirstBlockTitleText(block?.children);
+    if (childText.trim()) {
+      return childText;
+    }
+  }
+
+  return "";
+}
+
+function stripMarkdownTitleSyntax(value) {
+  return String(value)
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^\[[ xX]\]\s+/, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`~]/g, "");
+}
+
+function formatTrashTimestamp(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "Deleted recently";
+  }
+
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Deleted recently";
+  }
+
+  return `Deleted ${date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
 }
 
 function getSessionShortcutLabel(index) {
@@ -3137,6 +4355,14 @@ const BLOCKNOTE_FLOATING_MENU_SELECTOR = [
   ".mantine-Popover-dropdown",
   "[data-menu-dropdown='true']",
 ].join(", ");
+const BLOCKNOTE_NESTED_COLOR_ITEM_SELECTOR = [
+  ".bn-color-picker-dropdown [data-test^='text-color-']",
+  ".bn-color-picker-dropdown [data-test^='background-color-']",
+].join(", ");
+const BLOCKNOTE_VISIBLE_OVERFLOW_MENU_SELECTOR = [
+  ".bn-drag-handle-menu",
+  ".bn-table-handle-menu",
+].join(", ");
 
 function useBlockNoteFloatingMenuGuard() {
   useEffect(() => {
@@ -3148,7 +4374,11 @@ function useBlockNoteFloatingMenuGuard() {
         animationFrame = window.requestAnimationFrame(repositionBlockNoteFloatingMenus);
       });
     };
-    const scheduleDelayedPositionUpdate = () => {
+    const scheduleDelayedPositionUpdate = (event) => {
+      if (isBlockNoteFloatingMenuInteraction(event)) {
+        return;
+      }
+
       schedulePositionUpdate();
       window.setTimeout(schedulePositionUpdate, 0);
       window.setTimeout(schedulePositionUpdate, 80);
@@ -3164,6 +4394,11 @@ function useBlockNoteFloatingMenuGuard() {
     window.addEventListener("resize", schedulePositionUpdate);
     window.addEventListener("scroll", scheduleDelayedPositionUpdate, true);
     document.addEventListener("mousedown", scheduleDelayedPositionUpdate, true);
+    document.addEventListener(
+      "pointerup",
+      dispatchBlockNoteColorItemClick,
+      true,
+    );
     document.addEventListener("pointerup", scheduleDelayedPositionUpdate, true);
     document.addEventListener("click", scheduleDelayedPositionUpdate);
     document.addEventListener("keydown", scheduleDelayedPositionUpdate, true);
@@ -3176,6 +4411,11 @@ function useBlockNoteFloatingMenuGuard() {
       window.removeEventListener("resize", schedulePositionUpdate);
       window.removeEventListener("scroll", scheduleDelayedPositionUpdate, true);
       document.removeEventListener("mousedown", scheduleDelayedPositionUpdate, true);
+      document.removeEventListener(
+        "pointerup",
+        dispatchBlockNoteColorItemClick,
+        true,
+      );
       document.removeEventListener("pointerup", scheduleDelayedPositionUpdate, true);
       document.removeEventListener("click", scheduleDelayedPositionUpdate);
       document.removeEventListener("keydown", scheduleDelayedPositionUpdate, true);
@@ -3184,14 +4424,56 @@ function useBlockNoteFloatingMenuGuard() {
   }, []);
 }
 
+function dispatchBlockNoteColorItemClick(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const colorItem = target.closest(BLOCKNOTE_NESTED_COLOR_ITEM_SELECTOR);
+  if (!(colorItem instanceof HTMLElement)) {
+    return;
+  }
+
+  const colorMenu = colorItem.closest(".bn-color-picker-dropdown");
+  if (!colorMenu) {
+    return;
+  }
+
+  colorItem.dispatchEvent(
+    new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+    }),
+  );
+}
+
+function isBlockNoteFloatingMenuInteraction(event) {
+  const target = event?.target;
+  return target instanceof Element && Boolean(target.closest(BLOCKNOTE_FLOATING_MENU_SELECTOR));
+}
+
 function repositionBlockNoteFloatingMenus() {
   for (const element of document.querySelectorAll(BLOCKNOTE_FLOATING_MENU_SELECTOR)) {
-    if (!(element instanceof HTMLElement) || element.closest(".editor-floating-menu")) {
+    if (
+      !(element instanceof HTMLElement) ||
+      element.closest(".editor-floating-menu")
+    ) {
+      continue;
+    }
+
+    if (isNestedBlockNoteFloatingMenu(element)) {
+      keepNestedElementInsideViewport(element);
       continue;
     }
 
     keepElementInsideViewport(element);
   }
+}
+
+function isNestedBlockNoteFloatingMenu(element) {
+  return Boolean(element.parentElement?.closest(BLOCKNOTE_FLOATING_MENU_SELECTOR));
 }
 
 function keepElementInsideViewport(element) {
@@ -3215,12 +4497,23 @@ function keepElementInsideViewport(element) {
   const viewportHeight = window.innerHeight;
   const maxWidth = Math.max(1, viewportWidth - margin * 2);
   const maxHeight = Math.max(80, viewportHeight - margin * 2);
+  const hasNestedFloatingMenu = Boolean(
+    element.querySelector(
+      ".bn-menu-dropdown, .mantine-Menu-dropdown, .mantine-Popover-dropdown",
+    ),
+  );
+  const measuredWidth = hasNestedFloatingMenu
+    ? rect.width
+    : Math.max(rect.width, element.scrollWidth || rect.width);
+  const measuredHeight = hasNestedFloatingMenu
+    ? rect.height
+    : Math.max(rect.height, element.scrollHeight || rect.height);
   const desiredWidth = Math.min(
-    Math.max(rect.width, element.scrollWidth || rect.width),
+    measuredWidth,
     maxWidth,
   );
   const desiredHeight = Math.min(
-    Math.max(rect.height, element.scrollHeight || rect.height),
+    measuredHeight,
     maxHeight,
   );
   const left = clamp(
@@ -3234,11 +4527,62 @@ function keepElementInsideViewport(element) {
     Math.max(margin, viewportHeight - desiredHeight - margin),
   );
   const containingRect = getFixedPositionContainingRect(element);
+  const allowsVisibleOverflow =
+    hasNestedFloatingMenu || element.matches(BLOCKNOTE_VISIBLE_OVERFLOW_MENU_SELECTOR);
 
   setImportantStyle(element, "position", "fixed");
   setImportantStyle(element, "transform", "none");
   setImportantStyle(element, "left", `${left - containingRect.left}px`);
   setImportantStyle(element, "top", `${top - containingRect.top}px`);
+  setImportantStyle(element, "max-width", `${maxWidth}px`);
+  setImportantStyle(element, "max-height", `${maxHeight}px`);
+  setImportantStyle(element, "overflow", allowsVisibleOverflow ? "visible" : "auto");
+}
+
+function keepNestedElementInsideViewport(element) {
+  const computedStyle = window.getComputedStyle(element);
+  if (
+    computedStyle.display === "none" ||
+    computedStyle.visibility === "hidden" ||
+    Number(computedStyle.opacity) <= 0.01 ||
+    element.getAttribute("aria-hidden") === "true"
+  ) {
+    return;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0 || element.scrollHeight <= 0) {
+    return;
+  }
+
+  const margin = FLOATING_EDITOR_MENU_MARGIN;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxWidth = Math.max(1, viewportWidth - margin * 2);
+  const maxHeight = Math.max(80, viewportHeight - margin * 2);
+  const currentLeft = Number.parseFloat(computedStyle.left);
+  const currentTop = Number.parseFloat(computedStyle.top);
+  const baseLeft = Number.isFinite(currentLeft) ? currentLeft : 0;
+  const baseTop = Number.isFinite(currentTop) ? currentTop : 0;
+  let nextLeft = baseLeft;
+  let nextTop = baseTop;
+
+  if (rect.right > viewportWidth - margin) {
+    nextLeft -= rect.right - (viewportWidth - margin);
+  }
+  if (rect.left + (nextLeft - baseLeft) < margin) {
+    nextLeft += margin - (rect.left + (nextLeft - baseLeft));
+  }
+  if (rect.bottom > viewportHeight - margin) {
+    nextTop -= rect.bottom - (viewportHeight - margin);
+  }
+  if (rect.top + (nextTop - baseTop) < margin) {
+    nextTop += margin - (rect.top + (nextTop - baseTop));
+  }
+
+  setImportantStyle(element, "transform", "none");
+  setImportantStyle(element, "left", `${nextLeft}px`);
+  setImportantStyle(element, "top", `${nextTop}px`);
   setImportantStyle(element, "max-width", `${maxWidth}px`);
   setImportantStyle(element, "max-height", `${maxHeight}px`);
   setImportantStyle(element, "overflow", "auto");
@@ -3281,17 +4625,22 @@ function getFixedPositionContainingRect(element) {
   };
 }
 
-function FloatingEditorMenu({
+function FloatingDropdownMenu({
   anchorRef,
   ariaLabel,
   children,
-  className,
+  className = "",
   id,
   isOpen,
   maxHeight = 220,
+  maxWidth = 260,
+  minWidth = 120,
+  onRequestClose,
   preferredWidth = 180,
+  align = "start",
 }) {
   const [style, setStyle] = useState(null);
+  const menuRef = useRef(null);
 
   const updatePosition = useCallback(() => {
     const anchorElement = anchorRef.current;
@@ -3301,12 +4650,23 @@ function FloatingEditorMenu({
     }
 
     setStyle(
-      getFloatingEditorMenuStyle(anchorElement, {
+      getFloatingDropdownMenuStyle(anchorElement, {
+        align,
         maxHeight,
+        maxWidth,
+        minWidth,
         preferredWidth,
       }),
     );
-  }, [anchorRef, isOpen, maxHeight, preferredWidth]);
+  }, [
+    align,
+    anchorRef,
+    isOpen,
+    maxHeight,
+    maxWidth,
+    minWidth,
+    preferredWidth,
+  ]);
 
   useLayoutEffect(() => {
     if (!isOpen) {
@@ -3324,17 +4684,56 @@ function FloatingEditorMenu({
     };
   }, [isOpen, updatePosition]);
 
+  useEffect(() => {
+    if (!isOpen || !onRequestClose) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (
+        menuRef.current?.contains(target) ||
+        anchorRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      onRequestClose();
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onRequestClose();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [anchorRef, isOpen, onRequestClose]);
+
   if (!isOpen || !style || typeof document === "undefined") {
     return null;
   }
+  const { placement, ...positionStyle } = style;
 
   return createPortal(
     <div
+      ref={menuRef}
       id={id}
-      className={`${className} editor-floating-menu`.trim()}
+      className={`notepane-dropdown-menu ${className} editor-floating-menu`.trim()}
       role="listbox"
       aria-label={ariaLabel}
-      style={style}
+      data-placement={placement}
+      style={positionStyle}
       onMouseDown={preventFocusLoss}
     >
       {children}
@@ -3343,26 +4742,278 @@ function FloatingEditorMenu({
   );
 }
 
-function getFloatingEditorMenuStyle(
+function DropdownMenuOption({
+  children,
+  className = "",
+  meta = null,
+  selected = false,
+  style,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected ? "true" : "false"}
+      className={`notepane-dropdown-option ${className}`.trim()}
+      style={style}
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onClick={onClick}
+    >
+      <span className="notepane-dropdown-option-check" aria-hidden="true">
+        {selected && <Check className="notepane-action-icon" />}
+      </span>
+      <span className="notepane-dropdown-option-label">{children}</span>
+      {meta && <span className="notepane-dropdown-option-meta">{meta}</span>}
+    </button>
+  );
+}
+
+function AdaptiveTooltipPortal() {
+  const [tooltip, setTooltip] = useState(null);
+  const targetRef = useRef(null);
+
+  const showTooltip = useCallback((target) => {
+    const text = target?.getAttribute?.("data-tooltip")?.trim();
+    if (!text) {
+      return;
+    }
+
+    targetRef.current = target;
+    setTooltip({ target, text });
+  }, []);
+
+  const hideTooltip = useCallback((target) => {
+    if (target && targetRef.current !== target) {
+      return;
+    }
+
+    targetRef.current = null;
+    setTooltip(null);
+  }, []);
+
+  useEffect(() => {
+    const handlePointerOver = (event) => {
+      const target = getTooltipTarget(event.target);
+      if (!target) {
+        return;
+      }
+
+      if (
+        event.relatedTarget instanceof Node &&
+        target.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+
+      showTooltip(target);
+    };
+
+    const handlePointerOut = (event) => {
+      const target = getTooltipTarget(event.target);
+      if (!target) {
+        return;
+      }
+
+      if (
+        event.relatedTarget instanceof Node &&
+        target.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+
+      hideTooltip(target);
+    };
+
+    const handleFocusIn = (event) => {
+      const target = getTooltipTarget(event.target);
+      if (target) {
+        showTooltip(target);
+      }
+    };
+
+    const handleFocusOut = (event) => {
+      const target = getTooltipTarget(event.target);
+      if (target) {
+        hideTooltip(target);
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        hideTooltip();
+      }
+    };
+
+    document.addEventListener("pointerover", handlePointerOver, true);
+    document.addEventListener("pointerout", handlePointerOut, true);
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.addEventListener("focusout", handleFocusOut, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+
+    return () => {
+      document.removeEventListener("pointerover", handlePointerOver, true);
+      document.removeEventListener("pointerout", handlePointerOut, true);
+      document.removeEventListener("focusin", handleFocusIn, true);
+      document.removeEventListener("focusout", handleFocusOut, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [hideTooltip, showTooltip]);
+
+  if (!tooltip || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <AdaptiveTooltip target={tooltip.target} text={tooltip.text} />,
+    document.body,
+  );
+}
+
+function AdaptiveTooltip({ target, text }) {
+  const tooltipRef = useRef(null);
+  const [style, setStyle] = useState({
+    left: 0,
+    top: 0,
+    visibility: "hidden",
+  });
+  const { placement, ...positionStyle } = style;
+
+  const updatePosition = useCallback(() => {
+    const tooltipElement = tooltipRef.current;
+    if (!tooltipElement || !target || !document.documentElement.contains(target)) {
+      return;
+    }
+
+    const anchorRect = target.getBoundingClientRect();
+    const tooltipRect = tooltipElement.getBoundingClientRect();
+    setStyle(
+      getAdaptiveTooltipStyle(anchorRect, {
+        width: tooltipRect.width,
+        height: tooltipRect.height,
+      }),
+    );
+  }, [target]);
+
+  useLayoutEffect(() => {
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [updatePosition, text]);
+
+  return (
+    <div
+      ref={tooltipRef}
+      className="adaptive-tooltip"
+      data-placement={placement}
+      role="tooltip"
+      style={positionStyle}
+    >
+      {text}
+    </div>
+  );
+}
+
+function getTooltipTarget(target) {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  return target.closest(".has-tooltip[data-tooltip]");
+}
+
+const ADAPTIVE_TOOLTIP_MARGIN = 8;
+const ADAPTIVE_TOOLTIP_GAP = 8;
+
+function getAdaptiveTooltipStyle(anchorRect, tooltipSize) {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.max(1, tooltipSize.width);
+  const height = Math.max(1, tooltipSize.height);
+  const margin = ADAPTIVE_TOOLTIP_MARGIN;
+  const gap = ADAPTIVE_TOOLTIP_GAP;
+  const centeredLeft = anchorRect.left + anchorRect.width / 2 - width / 2;
+  const clampLeft = (left) =>
+    clamp(left, margin, Math.max(margin, viewportWidth - width - margin));
+  const clampTop = (top) =>
+    clamp(top, margin, Math.max(margin, viewportHeight - height - margin));
+  const verticalCandidates = [
+    {
+      placement: "bottom",
+      left: clampLeft(centeredLeft),
+      top: anchorRect.bottom + gap,
+    },
+    {
+      placement: "top",
+      left: clampLeft(centeredLeft),
+      top: anchorRect.top - height - gap,
+    },
+  ];
+  const selectedVertical = verticalCandidates.find(
+    (candidate) =>
+      candidate.top >= margin &&
+      candidate.top + height <= viewportHeight - margin,
+  );
+  const sidePlacement =
+    anchorRect.left + anchorRect.width / 2 < viewportWidth / 2
+      ? "right"
+      : "left";
+  const sideLeft =
+    sidePlacement === "right"
+      ? anchorRect.right + gap
+      : anchorRect.left - width - gap;
+  const selected =
+    selectedVertical ?? {
+      placement: sidePlacement,
+      left: clampLeft(sideLeft),
+      top: clampTop(anchorRect.top + anchorRect.height / 2 - height / 2),
+    };
+
+  return {
+    left: `${selected.left}px`,
+    top: `${clampTop(selected.top)}px`,
+    placement: selected.placement,
+    visibility: "visible",
+  };
+}
+
+function getFloatingDropdownMenuStyle(
   anchorElement,
-  { maxHeight, preferredWidth },
+  { align, maxHeight, maxWidth, minWidth, preferredWidth },
 ) {
   const anchorRect = anchorElement.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
   const margin = FLOATING_EDITOR_MENU_MARGIN;
-  const width = Math.max(
-    1,
-    Math.min(preferredWidth, viewportWidth - margin * 2),
+  const viewportAvailableWidth = Math.max(1, viewportWidth - margin * 2);
+  const resolvedMaxWidth = clamp(maxWidth, 1, viewportAvailableWidth);
+  const resolvedMinWidth = Math.min(
+    resolvedMaxWidth,
+    Math.max(1, minWidth, anchorRect.width),
   );
+  const width = clamp(preferredWidth, resolvedMinWidth, resolvedMaxWidth);
   const spaceBelow = viewportHeight - anchorRect.bottom - margin;
   const spaceAbove = anchorRect.top - margin;
   const shouldOpenAbove =
-    spaceBelow < Math.min(maxHeight, 150) && spaceAbove > spaceBelow;
+    spaceBelow < Math.min(maxHeight, 132) && spaceAbove > spaceBelow;
   const availableHeight = shouldOpenAbove ? spaceAbove : spaceBelow;
-  const height = Math.max(80, Math.min(maxHeight, availableHeight));
+  const height = Math.max(72, Math.min(maxHeight, availableHeight));
+  const rawLeft =
+    align === "end"
+      ? anchorRect.right - width
+      : align === "center"
+        ? anchorRect.left + anchorRect.width / 2 - width / 2
+        : anchorRect.left;
   const left = clamp(
-    anchorRect.left,
+    rawLeft,
     margin,
     Math.max(margin, viewportWidth - width - margin),
   );
@@ -3381,74 +5032,54 @@ function getFloatingEditorMenuStyle(
   return {
     left: `${left}px`,
     maxHeight: `${height}px`,
+    placement: shouldOpenAbove ? "top" : "bottom",
     top: `${top}px`,
     width: `${width}px`,
   };
 }
 
-function EditorTypographyControl({
+function EditorFontFamilyControl({
   className = "",
-  draftValue,
   fontFamily,
   fontOptions = EDITOR_BUILTIN_FONT_FAMILY_OPTIONS,
-  leadingControl = null,
-  scale,
-  trailingControl = null,
-  onDraftChange,
-  onCommit,
   onFontFamilyChange,
-  onFontSizeChange,
 }) {
-  const currentFontSize = editorFontScaleToSize(scale);
   const normalizedFontFamily = normalizeEditorFontFamily(fontFamily);
   const selectedFontOption = getEditorFontFamilyOption(
     normalizedFontFamily,
     fontOptions,
   );
-  const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
   const [fontQuery, setFontQuery] = useState("");
   const fontMenuAnchorRef = useRef(null);
-  const sizeMenuAnchorRef = useRef(null);
   const filteredFontOptions = useMemo(
     () => filterEditorFontOptions(fontOptions, fontQuery),
     [fontOptions, fontQuery],
   );
 
-  const applyFontSize = useCallback(
-    (nextSize) => {
-      const normalizedSize = normalizeEditorFontSize(nextSize, currentFontSize);
-      onDraftChange(String(normalizedSize));
-      onFontSizeChange(normalizedSize);
-      setIsSizeMenuOpen(false);
-    },
-    [currentFontSize, onDraftChange, onFontSizeChange],
-  );
+  const closeFontMenu = useCallback(() => {
+    setFontQuery("");
+    setIsFontMenuOpen(false);
+  }, []);
 
   const applyFontFamily = useCallback(
     (nextFontFamily) => {
       const normalizedValue = normalizeEditorFontFamily(nextFontFamily);
       const option = getEditorFontFamilyOption(normalizedValue, fontOptions);
       onFontFamilyChange(normalizedValue);
-      setFontQuery(option.label);
-      setIsFontMenuOpen(false);
+      setFontQuery(option.label === selectedFontOption.label ? "" : option.label);
+      closeFontMenu();
     },
-    [fontOptions, onFontFamilyChange],
+    [closeFontMenu, fontOptions, onFontFamilyChange, selectedFontOption.label],
   );
 
   return (
     <div
-      className={`editor-typography-control ${className}`.trim()}
-      role="group"
-      aria-label="Editor typography"
+      ref={fontMenuAnchorRef}
+      className={`editor-font-setting-control editor-font-family-control ${className}`.trim()}
       onMouseDown={preventFocusLoss}
     >
-      {leadingControl && (
-        <div className="editor-typography-slot editor-typography-leading">
-          {leadingControl}
-        </div>
-      )}
-      <div ref={fontMenuAnchorRef} className="editor-font-family-combobox">
+      <div className="editor-font-family-combobox">
         <input
           className="editor-font-family-input"
           aria-label="Editor font family"
@@ -3457,12 +5088,12 @@ function EditorTypographyControl({
           aria-haspopup="listbox"
           aria-controls="editor-font-family-options"
           spellCheck={false}
+          placeholder={selectedFontOption.label}
           value={isFontMenuOpen ? fontQuery : selectedFontOption.label}
           onMouseDown={(event) => event.stopPropagation()}
           onFocus={() => {
             setFontQuery("");
             setIsFontMenuOpen(true);
-            setIsSizeMenuOpen(false);
           }}
           onChange={(event) => {
             setFontQuery(event.target.value);
@@ -3487,8 +5118,7 @@ function EditorTypographyControl({
 
             if (event.key === "Escape") {
               event.preventDefault();
-              setFontQuery("");
-              setIsFontMenuOpen(false);
+              closeFontMenu();
               event.currentTarget.blur();
             }
           }}
@@ -3506,48 +5136,77 @@ function EditorTypographyControl({
           onClick={() => {
             setFontQuery("");
             setIsFontMenuOpen((value) => !value);
-            setIsSizeMenuOpen(false);
           }}
         >
           ⌄
         </button>
-        <FloatingEditorMenu
+        <FloatingDropdownMenu
           id="editor-font-family-options"
           anchorRef={fontMenuAnchorRef}
           ariaLabel="Font family options"
           className="editor-font-family-menu"
           isOpen={isFontMenuOpen}
-          maxHeight={228}
-          preferredWidth={260}
+          maxHeight={216}
+          maxWidth={238}
+          minWidth={168}
+          onRequestClose={closeFontMenu}
+          preferredWidth={218}
         >
           {filteredFontOptions.length > 0 ? (
             filteredFontOptions.map((option) => (
-              <button
+              <DropdownMenuOption
                 key={option.value}
-                type="button"
-                role="option"
-                aria-selected={
-                  option.value === normalizedFontFamily ? "true" : "false"
-                }
+                className="editor-font-family-option"
+                selected={option.value === normalizedFontFamily}
                 style={{ "--font-option-family": option.css }}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
                 onClick={() => applyFontFamily(option.value)}
+                meta={option.source === "installed" ? "Local" : null}
               >
-                <span>{option.label}</span>
-                {option.source === "installed" && (
-                  <span className="editor-font-source">Local</span>
-                )}
-              </button>
+                {option.label}
+              </DropdownMenuOption>
             ))
           ) : (
             <div className="editor-font-family-empty">No fonts found</div>
           )}
-        </FloatingEditorMenu>
+        </FloatingDropdownMenu>
       </div>
-      <div ref={sizeMenuAnchorRef} className="editor-font-size-combobox">
+    </div>
+  );
+}
+
+function EditorFontSizeControl({
+  className = "",
+  draftValue,
+  scale,
+  onDraftChange,
+  onCommit,
+  onFontSizeChange,
+}) {
+  const currentFontSize = editorFontScaleToSize(scale);
+  const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
+  const sizeMenuAnchorRef = useRef(null);
+
+  const closeSizeMenu = useCallback(() => {
+    setIsSizeMenuOpen(false);
+  }, []);
+
+  const applyFontSize = useCallback(
+    (nextSize) => {
+      const normalizedSize = normalizeEditorFontSize(nextSize, currentFontSize);
+      onDraftChange(String(normalizedSize));
+      onFontSizeChange(normalizedSize);
+      closeSizeMenu();
+    },
+    [closeSizeMenu, currentFontSize, onDraftChange, onFontSizeChange],
+  );
+
+  return (
+    <div
+      ref={sizeMenuAnchorRef}
+      className={`editor-font-setting-control editor-font-size-control ${className}`.trim()}
+      onMouseDown={preventFocusLoss}
+    >
+      <div className="editor-font-size-combobox">
         <input
           className="editor-font-size-input"
           aria-label="Editor font size"
@@ -3577,16 +5236,18 @@ function EditorTypographyControl({
             if (event.key === "ArrowDown") {
               event.preventDefault();
               setIsSizeMenuOpen(true);
+              return;
             }
             if (event.key === "Enter") {
               event.preventDefault();
               onCommit();
               event.currentTarget.blur();
+              return;
             }
             if (event.key === "Escape") {
               event.preventDefault();
               onDraftChange(String(currentFontSize));
-              setIsSizeMenuOpen(false);
+              closeSizeMenu();
               event.currentTarget.blur();
             }
           }}
@@ -3605,36 +5266,30 @@ function EditorTypographyControl({
         >
           ⌄
         </button>
-        <FloatingEditorMenu
+        <FloatingDropdownMenu
           anchorRef={sizeMenuAnchorRef}
           ariaLabel="Editor font size presets"
           className="editor-font-size-menu"
           isOpen={isSizeMenuOpen}
-          maxHeight={190}
-          preferredWidth={78}
+          align="end"
+          maxHeight={196}
+          maxWidth={104}
+          minWidth={76}
+          onRequestClose={closeSizeMenu}
+          preferredWidth={86}
         >
           {EDITOR_FONT_SIZE_PRESETS.map((fontSize) => (
-            <button
+            <DropdownMenuOption
               key={fontSize}
-              type="button"
-              role="option"
-              aria-selected={currentFontSize === fontSize ? "true" : "false"}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
+              className="editor-font-size-option"
+              selected={currentFontSize === fontSize}
               onClick={() => applyFontSize(fontSize)}
             >
               {fontSize}
-            </button>
+            </DropdownMenuOption>
           ))}
-        </FloatingEditorMenu>
+        </FloatingDropdownMenu>
       </div>
-      {trailingControl && (
-        <div className="editor-typography-slot editor-typography-trailing">
-          {trailingControl}
-        </div>
-      )}
     </div>
   );
 }
@@ -3668,6 +5323,10 @@ function normalizeEditorPreferences(
       source.editorFontFamily,
       fallbackSource.editorFontFamily,
     ),
+    showTableOfContents:
+      typeof source.showTableOfContents === "boolean"
+        ? source.showTableOfContents
+        : Boolean(fallbackSource.showTableOfContents),
   };
 }
 
@@ -3966,7 +5625,7 @@ function getSessionTabStyle(
     modeBase.active,
     tabTextOpacity,
   );
-  const activeTextColor = getContrastingTextColor(activeEffectiveBackground);
+  const activeTextColor = getSessionTabContrastingTextColor(activeEffectiveBackground);
   const inactiveTextColor = hexToCssRgb(activeTextColor, 0.72);
   const activeBorderColor = hexToCssRgb(activeTextColor, 0.34);
   const activeShadowColor = hexToCssRgb(activeTextColor, 0.12);
@@ -3987,21 +5646,92 @@ function getSessionTabStyle(
   };
 }
 
-function getStickyShellStyle(theme, accentColor) {
+function getStickyShellStyle(
+  theme,
+  accentColor,
+  appThemeMode = DEFAULT_APP_THEME.mode,
+) {
   const opacity = resolveTabTextOpacity(theme);
-  const effectiveBackground = blendHexOverHex(accentColor, "#ffffff", opacity);
-  const isLightBackground = getRelativeLuminance(effectiveBackground) > 0.46;
+  const baseBackground = appThemeMode === "dark" ? "#191919" : "#ffffff";
+  const effectiveBackground = blendHexOverHex(accentColor, baseBackground, opacity);
+  const textColor = getContrastingTextColor(
+    effectiveBackground,
+    "#37352f",
+    "#f7f7f4",
+  );
+  const isLightBackground = textColor === "#37352f";
   const headerColor = isLightBackground
     ? mixHexColors(accentColor, "#ffffff", 0.46)
     : mixHexColors(accentColor, "#000000", 0.08);
+  const headerEffectiveBackground = blendHexOverHex(
+    headerColor,
+    baseBackground,
+    Math.max(opacity, 0.96),
+  );
   const panelColor = isLightBackground
     ? mixHexColors(accentColor, "#ffffff", 0.34)
     : mixHexColors(accentColor, "#ffffff", 0.08);
-  const textColor = isLightBackground ? "#37352f" : "#f7f7f4";
-  const mutedColor = isLightBackground ? "#6f6d66" : "#cac7bd";
-  const borderColor = isLightBackground
-    ? "rgb(55 53 47 / 0.14)"
-    : "rgb(255 255 255 / 0.24)";
+  const panelOpacity = Math.min(opacity + 0.04, 1);
+  const panelEffectiveBackground = blendHexOverHex(
+    panelColor,
+    baseBackground,
+    panelOpacity,
+  );
+  const panelTextColor = getContrastingTextColor(
+    panelEffectiveBackground,
+    "#37352f",
+    "#f7f7f4",
+  );
+  const isLightPanelBackground = panelTextColor === "#37352f";
+  const mutedColor = hexToCssRgb(textColor, isLightBackground ? 0.72 : 0.78);
+  const panelMutedColor = hexToCssRgb(
+    panelTextColor,
+    isLightPanelBackground ? 0.68 : 0.76,
+  );
+  const borderColor = hexToCssRgb(textColor, isLightBackground ? 0.14 : 0.24);
+  const tableBorderColor = getReadableBoundaryColor(
+    effectiveBackground,
+    textColor,
+  );
+  const tableControlBackground = mixHexColors(
+    effectiveBackground,
+    "#000000",
+    isLightBackground ? 0.055 : 0.11,
+  );
+  const tableControlHoverBackground = mixHexColors(
+    effectiveBackground,
+    "#000000",
+    isLightBackground ? 0.09 : 0.16,
+  );
+  const tableControlBorderColor = mixHexColors(
+    effectiveBackground,
+    textColor,
+    isLightBackground ? 0.18 : 0.22,
+  );
+  const portalMenuBackground = mixHexColors(
+    effectiveBackground,
+    isLightBackground ? "#ffffff" : "#000000",
+    isLightBackground ? 0.18 : 0.1,
+  );
+  const portalMenuHoverBackground = mixHexColors(
+    portalMenuBackground,
+    textColor,
+    isLightBackground ? 0.08 : 0.14,
+  );
+  const portalMenuBorderColor = mixHexColors(
+    portalMenuBackground,
+    textColor,
+    isLightBackground ? 0.16 : 0.22,
+  );
+  const tableControlShadow = isLightBackground
+    ? "0 5px 12px rgb(55 53 47 / 0.12), inset 0 1px 0 rgb(255 255 255 / 0.28)"
+    : "0 7px 16px rgb(0 0 0 / 0.34), inset 0 1px 0 rgb(255 255 255 / 0.08)";
+  const portalMenuShadow = isLightBackground
+    ? "0 12px 26px rgb(55 53 47 / 0.16), inset 0 1px 0 rgb(255 255 255 / 0.38)"
+    : "0 14px 34px rgb(0 0 0 / 0.46), inset 0 1px 0 rgb(255 255 255 / 0.08)";
+  const blockNoteShadowColor = isLightBackground
+    ? "rgb(55 53 47 / 0.18)"
+    : "rgb(0 0 0 / 0.48)";
   const controlBackground = isLightBackground
     ? "rgb(255 255 255 / 0.46)"
     : "rgb(0 0 0 / 0.20)";
@@ -4022,17 +5752,34 @@ function getStickyShellStyle(theme, accentColor) {
     : "rgb(255 255 255 / 0.12)";
   const selectedBackground = isLightBackground ? "#37352f" : "#f7f7f4";
   const selectedText = isLightBackground ? "#ffffff" : "#191919";
+  const iconColor = isLightBackground ? "#4f534f" : "#f1f1ef";
+  const iconActiveColor = isLightBackground ? "#2f3437" : "#ffffff";
+  const iconSurfaceFill = isLightBackground
+    ? "rgb(255 255 255 / 0.40)"
+    : "rgb(255 255 255 / 0.10)";
+  const iconMutedFill = hexToCssRgb(textColor, isLightBackground ? 0.10 : 0.14);
 
   return {
     "--sticky-note-accent-color": accentColor,
+    "--sticky-effective-bg": effectiveBackground,
     "--sticky-note-bg": hexToCssRgb(accentColor, opacity),
-    "--sticky-note-header-bg": hexToCssRgb(headerColor, opacity),
-    "--sticky-note-panel-bg": hexToCssRgb(panelColor, Math.min(opacity + 0.04, 1)),
+    "--sticky-note-header-bg": headerEffectiveBackground,
+    "--sticky-note-panel-bg": hexToCssRgb(panelColor, panelOpacity),
     "--sticky-text-color": textColor,
     "--sticky-muted-color": mutedColor,
-    "--sticky-panel-text": textColor,
-    "--sticky-panel-muted": mutedColor,
+    "--sticky-panel-text": panelTextColor,
+    "--sticky-panel-muted": panelMutedColor,
     "--sticky-border-color": borderColor,
+    "--sticky-table-border-color": tableBorderColor,
+    "--sticky-table-control-border-color": tableControlBorderColor,
+    "--sticky-table-control-bg": tableControlBackground,
+    "--sticky-table-control-hover-bg": tableControlHoverBackground,
+    "--sticky-table-control-text": textColor,
+    "--sticky-table-control-shadow": tableControlShadow,
+    "--sticky-portal-menu-bg": portalMenuBackground,
+    "--sticky-portal-menu-hover-bg": portalMenuHoverBackground,
+    "--sticky-portal-menu-border-color": portalMenuBorderColor,
+    "--sticky-portal-menu-shadow": portalMenuShadow,
     "--sticky-control-bg": controlBackground,
     "--sticky-control-hover-bg": controlHoverBackground,
     "--sticky-code-bg": codeBackground,
@@ -4042,12 +5789,22 @@ function getStickyShellStyle(theme, accentColor) {
     "--sticky-glass-stroke": glassStroke,
     "--bn-colors-editor-text": textColor,
     "--bn-colors-menu-text": textColor,
+    "--bn-colors-menu-background": portalMenuBackground,
     "--bn-colors-tooltip-text": textColor,
+    "--bn-colors-tooltip-background": portalMenuHoverBackground,
     "--bn-colors-hovered-text": textColor,
+    "--bn-colors-hovered-background": portalMenuHoverBackground,
     "--bn-colors-selected-text": selectedText,
     "--bn-colors-selected-background": selectedBackground,
+    "--bn-colors-disabled-text": hexToCssRgb(textColor, isLightBackground ? 0.42 : 0.48),
+    "--bn-colors-disabled-background": hexToCssRgb(textColor, isLightBackground ? 0.08 : 0.12),
     "--bn-colors-border": borderColor,
+    "--bn-colors-shadow": blockNoteShadowColor,
     "--bn-colors-side-menu": mutedColor,
+    "--icon-chrome-color": iconColor,
+    "--icon-chrome-active-color": iconActiveColor,
+    "--icon-surface-fill": iconSurfaceFill,
+    "--icon-muted-fill": iconMutedFill,
   };
 }
 
@@ -4089,10 +5846,48 @@ function blendHexOverHex(foregroundHexColor, backgroundHexColor, foregroundOpaci
   );
 }
 
-function getContrastingTextColor(backgroundHexColor) {
+function getContrastingTextColor(
+  backgroundHexColor,
+  darkTextColor = SESSION_TAB_CONTRAST_TEXT.dark,
+  lightTextColor = SESSION_TAB_CONTRAST_TEXT.light,
+) {
+  const darkContrast = getContrastRatio(backgroundHexColor, darkTextColor);
+  const lightContrast = getContrastRatio(backgroundHexColor, lightTextColor);
+  return darkContrast >= lightContrast ? darkTextColor : lightTextColor;
+}
+
+function getSessionTabContrastingTextColor(backgroundHexColor) {
   return getRelativeLuminance(backgroundHexColor) > 0.46
     ? SESSION_TAB_CONTRAST_TEXT.dark
     : SESSION_TAB_CONTRAST_TEXT.light;
+}
+
+function getReadableBoundaryColor(
+  backgroundHexColor,
+  targetHexColor,
+  minimumContrast = 3,
+) {
+  for (let mixAmount = 0.24; mixAmount <= 1; mixAmount += 0.04) {
+    const candidateColor = mixHexColors(
+      backgroundHexColor,
+      targetHexColor,
+      mixAmount,
+    );
+
+    if (getContrastRatio(candidateColor, backgroundHexColor) >= minimumContrast) {
+      return candidateColor;
+    }
+  }
+
+  return targetHexColor;
+}
+
+function getContrastRatio(firstHexColor, secondHexColor) {
+  const firstLuminance = getRelativeLuminance(firstHexColor);
+  const secondLuminance = getRelativeLuminance(secondHexColor);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
 }
 
 function getRelativeLuminance(hexColor) {
@@ -4172,10 +5967,11 @@ function hsvToRgb(hue, saturation, value) {
   );
 }
 
-function formatColorValues(hexColor) {
+function formatColorValues(hexColor, opacity = DEFAULT_THEME.tabTextOpacity) {
   const [red, green, blue] = hexToRgb(hexColor);
   const hsl = rgbToHsl(red, green, blue);
   const lch = rgbToLch(red, green, blue);
+  const alphaSuffix = formatColorAlphaSuffix(opacity);
 
   return [
     {
@@ -4184,17 +5980,57 @@ function formatColorValues(hexColor) {
     },
     {
       label: "HSL",
-      value: `hsl(${Math.round(hsl.h)}deg ${Math.round(hsl.s * 100)}% ${Math.round(hsl.l * 100)}%)`,
+      value: `hsl(${Math.round(hsl.h)}deg ${Math.round(hsl.s * 100)}% ${Math.round(hsl.l * 100)}%${alphaSuffix})`,
     },
     {
       label: "RGB",
-      value: `rgb(${red} ${green} ${blue})`,
+      value: `rgb(${red} ${green} ${blue}${alphaSuffix})`,
     },
     {
       label: "LCH",
-      value: `lch(${Math.round(lch.l)}% ${Math.round(lch.c)} ${Math.round(lch.h)}deg)`,
+      value: `lch(${Math.round(lch.l)}% ${Math.round(lch.c)} ${Math.round(lch.h)}deg${alphaSuffix})`,
     },
   ];
+}
+
+function formatColorAlphaSuffix(opacity) {
+  const normalizedOpacity = normalizeOpacity(opacity);
+  if (normalizedOpacity >= 1) {
+    return "";
+  }
+
+  return ` / ${Math.round(normalizedOpacity * 100)}%`;
+}
+
+async function writeClipboardText(value) {
+  const text = String(value ?? "");
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to the legacy copy path below.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+  }
 }
 
 function parseColorValue(label, value) {
@@ -4712,8 +6548,37 @@ function selectAllBlocks(editor) {
     return;
   }
 
-  editor.focus();
-  editor.setSelection(editor.document[0], editor.document[editor.document.length - 1]);
+  selectAllEditorDocument(editor);
+  if (hasVisibleTextSelection()) {
+    return;
+  }
+
+  try {
+    editor.focus();
+    editor.setSelection(editor.document[0], editor.document[editor.document.length - 1]);
+  } catch {
+    // Some block types only support the ProseMirror whole-document selection above.
+  }
+}
+
+function selectAllEditorDocument(editor) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  if (!view || !state) {
+    return;
+  }
+
+  const wholeTextSelection = TextSelection.between(
+    state.doc.resolve(0),
+    state.doc.resolve(state.doc.content.size),
+  );
+
+  view.dispatch(
+    state.tr
+      .setSelection(wholeTextSelection)
+      .scrollIntoView(),
+  );
+  view.focus();
 }
 
 function isEmptyEditorSurfacePointer(event) {
@@ -4841,6 +6706,100 @@ function resolveBlocksForCut(editor, activeImageBlockId) {
   }
 }
 
+function extractTableOfContentsEntries(blocks) {
+  const entries = [];
+
+  collectBlocks(blocks, (block) => {
+    if (block?.type !== "heading" || !block.id) {
+      return;
+    }
+
+    const title = extractBlockPlainText(block.content).trim();
+    if (!title) {
+      return;
+    }
+
+    entries.push({
+      id: block.id,
+      title,
+      level: getHeadingLevel(block),
+    });
+  });
+
+  return entries;
+}
+
+function extractBlockPlainText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content.map(extractBlockPlainText).join("");
+  }
+
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") {
+      return content.text;
+    }
+
+    if (Array.isArray(content.rows)) {
+      return content.rows
+        .flatMap((row) => Array.isArray(row?.cells) ? row.cells : [])
+        .map(extractBlockPlainText)
+        .find((text) => text.trim()) ?? "";
+    }
+
+    return extractBlockPlainText(content.content);
+  }
+
+  return "";
+}
+
+function getHeadingLevel(block) {
+  const level = Number(
+    block?.props?.level ??
+      block?.props?.headingLevel ??
+      block?.props?.depth ??
+      1,
+  );
+
+  return clamp(Math.round(level), 1, 6, 1);
+}
+
+function scrollEditorBlockIntoView(blockId) {
+  const blockElement = getEditorBlockElement(blockId);
+  blockElement?.scrollIntoView({
+    block: "start",
+    inline: "nearest",
+    behavior: "smooth",
+  });
+}
+
+function getEditorBlockElement(blockId) {
+  if (!blockId) {
+    return null;
+  }
+
+  const escapedBlockId =
+    window.CSS?.escape?.(blockId) ?? String(blockId).replace(/["'\\]/g, "\\$&");
+  const selectors = [
+    `[data-id="${escapedBlockId}"]`,
+    `[data-block-id="${escapedBlockId}"]`,
+    `#${escapedBlockId}`,
+  ];
+
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    const blockElement = element?.closest?.(".bn-block-outer") ?? element;
+    if (blockElement) {
+      return blockElement;
+    }
+  }
+
+  return null;
+}
+
 function findBlockById(blocks, blockId) {
   if (!blockId) {
     return null;
@@ -4875,7 +6834,11 @@ function findImageBlockBySource(blocks, sourceUrl) {
 }
 
 function collectBlocks(blocks, callback) {
-  for (const block of blocks) {
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    if (!block) {
+      continue;
+    }
+
     callback(block);
     collectBlocks(block.children || [], callback);
   }
@@ -4895,54 +6858,6 @@ function urlsMatch(left, right) {
   } catch {
     return false;
   }
-}
-
-function getCaptureRect() {
-  const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-  if (!surface) {
-    return undefined;
-  }
-
-  const rect = surface.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.floor(rect.x)),
-    y: Math.max(0, Math.floor(rect.y)),
-    width: Math.max(
-      1,
-      Math.ceil(Math.max(rect.width, surface.scrollWidth, surface.clientWidth)),
-    ),
-    height: Math.max(
-      1,
-      Math.ceil(Math.max(rect.height, surface.scrollHeight, surface.clientHeight)),
-    ),
-  };
-}
-
-async function renderExportPng(rect) {
-  const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-  if (!surface) {
-    return undefined;
-  }
-
-  const width = rect?.width ?? Math.max(surface.scrollWidth, surface.clientWidth, 1);
-  const height = rect?.height ?? Math.max(surface.scrollHeight, surface.clientHeight, 1);
-  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
-
-  return await toPng(surface, {
-    backgroundColor: "transparent",
-    cacheBust: true,
-    canvasWidth: Math.ceil(width * pixelRatio),
-    canvasHeight: Math.ceil(height * pixelRatio),
-    pixelRatio,
-    width,
-    height,
-    style: {
-      width: `${width}px`,
-      height: `${height}px`,
-      maxWidth: "none",
-      maxHeight: "none",
-    },
-  });
 }
 
 function imageFileName(name, url) {

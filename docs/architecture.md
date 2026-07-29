@@ -15,7 +15,7 @@
 | `electron/main.cjs` | app lifecycle, tab/sticky window orchestration, native menu, note/session create/activate/delete/detach/attach IPC, export/download IPC |
 | `electron/store.cjs` | local JSON persistence |
 | `electron/preload.cjs` | safe renderer bridge |
-| `src/main.jsx` | BlockNote editor, sidebar sessions, layout mode switch, app theme switch, preferences panel, export menu, image tools |
+| `src/main.jsx` | BlockNote editor, sidebar sessions, layout mode switch, app theme state, preferences panel, export menu, image tools |
 | `src/styles.css` | transparent sticky shell CSS |
 
 The renderer owns editor behavior. The desktop shell does not override BlockNote keyboard or mouse behavior.
@@ -108,10 +108,16 @@ Session tab backgrounds can use each session's accent color. Active, inactive, a
 that accent plus the current Light/Dark mode. The title text color is calculated from the effective background so the
 tab remains readable in both modes.
 
-The Light/Dark switch is shown directly in the Tab session mode header and does not require opening Preferences.
-Sticky mode hides this switch to keep each sticky window compact; the app-wide shortcut/menu state still remains global.
+Light/Dark mode is changed through Preferences or `Command + Shift + L`; the app-wide shortcut/menu state remains global.
+Tab and Sticky mode do not expose a persistent Light/Dark switch in the primary chrome.
 
-The Preferences panel is opened from the macOS app menu or `Command + ,` and is only for sidebar tab accent styling:
+The Preferences panel is opened from the sidebar footer button, macOS app menu, or `Command + ,` and keeps app-wide/default settings:
+
+- Light/Dark app theme
+- default editor font family and size for newly created sessions
+- keyboard shortcut reference
+
+Session tab color is a per-session setting opened from each session tab's right-click context menu:
 
 - circular hue/saturation wheel
 - brightness/value slider that remains unchanged when hue/saturation changes
@@ -120,9 +126,9 @@ The Preferences panel is opened from the macOS app menu or `Command + ,` and is 
 - editable HEX/HSL/RGB/LCH fields
 - HEX/HSL/RGB/LCH copy buttons
 
-The selected or typed accent color is parsed back into the active session's `theme.tabTextColor`.
-The opacity slider is parsed back into the active session's `theme.tabTextOpacity`.
-Sticky-mode header color controls use the same fields for the sticky background, so returning to Tab session mode
+The selected or typed accent color is parsed back into the target session's `theme.tabTextColor`.
+The opacity slider is parsed back into the target session's `theme.tabTextOpacity`.
+Sticky-mode settings use the same fields for the sticky background, so returning to Tab session mode
 keeps the selected color/opacity on that session tab.
 
 ## Sticky chrome boundary
@@ -131,11 +137,11 @@ Sticky styling is applied outside the BlockNote editor:
 
 - `.sticky-header` has no title text in tab session mode.
 - `.sticky-header` contains editable title in sticky mode.
-- `.sticky-header` contains the sidebar toggle or title, drag strip, layout switch, and export controls.
-- Sticky mode uses a shorter header and hides the Light/Dark switch.
-- The sticky header exposes a color button for sticky background color/opacity.
+- `.sticky-header` contains the sidebar toggle or title, drag strip, and mode-specific action controls.
+- Sticky mode uses a shorter header.
+- The sticky header exposes a gear button that opens per-sticky window settings for background color/opacity, pinning, layout, and editor controls.
 - Sticky mode calculates text, border, code, and table colors from the current sticky background to keep contrast readable.
-- The Preferences panel contains only sidebar tab accent color/opacity settings in Tab session mode.
+- The session tab context menu exposes per-tab color/opacity settings in Tab session mode.
 - The export control uses a share-style icon and opens PNG/PDF choices.
 - `.sticky-header` is the only drag region.
 - `.sticky-editor-surface` is explicitly `no-drag`.

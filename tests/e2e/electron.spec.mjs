@@ -15,35 +15,39 @@ test("Electron app opens a sticky window and persists editor content", async () 
   try {
     const page = await electronApp.firstWindow();
     await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
-    await expect(page.getByText("Welcome to BlockNote!"))
+    await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
       .toBeVisible();
 
     await page.getByRole("tab").first().dblclick();
     await page.getByLabel("Session name").fill("Project note");
     await page.keyboard.press("Enter");
-    await page.getByRole("switch", { name: "Theme mode" }).click();
+    await page.keyboard.press(modifierShortcut("Shift+L"));
     await clickMenuItem(electronApp, "Preferences");
     await expect(page.getByRole("dialog", { name: "Preferences window" }))
       .toBeVisible();
-    await page.getByLabel("RGB session tab color value").fill("rgb(255 255 255)");
+    await expect(page.getByLabel("RGB session tab color value")).toHaveCount(0);
     await page.getByRole("button", { name: "Close preferences" }).click();
     await expect(page.getByRole("dialog", { name: "Preferences window" }))
+      .toHaveCount(0);
+
+    await page.locator(".session-tab-row").first().click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Color..." }).click();
+    const sessionColorPanel = page.getByRole("dialog", { name: "Session color panel" });
+    await expect(sessionColorPanel).toBeVisible();
+    await page.getByLabel("RGB session tab color value").fill("rgb(255 255 255)");
+    await sessionColorPanel.getByRole("button", { name: "Close preferences" }).click();
+    await expect(sessionColorPanel)
       .toHaveCount(0);
     await page.addStyleTag({
       content: ".bn-editor { padding-bottom: 1400px !important; }",
     });
     await page.getByRole("paragraph").filter({ hasText: /^$/ }).last().click();
     await page.keyboard.insertText("electron persistence probe");
-    await page.keyboard.press(modifierShortcut("Shift+E"));
-    await page.getByRole("menuitem", { name: "Export as PNG" }).click();
-    await expect.poll(
-      () => fs.existsSync(path.join(exportDirectory, "Project note.png")),
-      { timeout: 20_000 },
-    )
-      .toBe(true);
-    await page.keyboard.press(modifierShortcut("Shift+E"));
-    await page.getByRole("menuitem", { name: "Export as PDF" }).click();
-    await page.waitForTimeout(800);
+    await page.getByRole("button", { name: "Export PDF" }).click();
+    await expect(page.locator(".sticky-toast-success"))
+      .toHaveText("PDF exported");
+    await expect(page.locator(".sticky-toast-success"))
+      .toHaveCount(0, { timeout: 5000 });
 
     const notesPath = path.join(userDataDirectory, "notes.json");
     await expect.poll(() => fs.existsSync(notesPath)).toBe(true);
@@ -69,15 +73,10 @@ test("Electron app opens a sticky window and persists editor content", async () 
     expect(notes[0].markdown).toContain("electron persistence probe");
     expect(notes[0].blocksJSON).toContain("electron persistence probe");
     expect(notes[0].alwaysOnTop).toBe(false);
-    expect(fs.statSync(path.join(exportDirectory, "Project note.png")).size)
-      .toBeGreaterThan(1000);
     expect(fs.statSync(path.join(exportDirectory, "Project note.pdf")).size)
       .toBeGreaterThan(1000);
-    const pngDimensions = readPngDimensions(
-      path.join(exportDirectory, "Project note.png"),
-    );
-    expect(pngDimensions.height).toBeGreaterThan(pngDimensions.width);
-    expect(pngDimensions.height).toBeGreaterThan(1200);
+    expect(fs.existsSync(path.join(exportDirectory, "Project note.png")))
+      .toBe(false);
   } finally {
     await electronApp.close();
   }
@@ -92,7 +91,7 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
   try {
     const page = await electronApp.firstWindow();
     await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
-    await expect(page.getByText("Welcome to BlockNote!"))
+    await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
       .toBeVisible();
 
     await expect.poll(async () => {
@@ -158,16 +157,146 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
     });
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
+        return BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop();
       });
     }).toBe(false);
 
     await clickMenuItem(electronApp, "Toggle Always On Top");
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
+        return BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop();
       });
     }).toBe(true);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron trash hides notes from tabs and sticky windows until restored", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "first-note",
+      title: "First note",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "second-note",
+      title: "Second note",
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]);
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+
+    await page.evaluate(async () => {
+      await window.blocknoteSticky.deleteNote("second-note");
+    });
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    await expect.poll(() => getStoredTrashState(userDataDirectory)).toEqual({
+      activeNoteIds: ["first-note"],
+      trashedNoteIds: ["second-note"],
+    });
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(1);
+
+    await page.evaluate(async () => {
+      await window.blocknoteSticky.restoreNote("second-note");
+    });
+    await expect.poll(() => getStoredTrashState(userDataDirectory)).toEqual({
+      activeNoteIds: ["first-note", "second-note"],
+      trashedNoteIds: [],
+    });
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    const restoredPage = await getStickyPageByNoteId(electronApp, "second-note");
+    await expect(restoredPage.getByTestId("sticky-shell"))
+      .toHaveAttribute("data-layout-mode", "sticky");
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron sticky header trash confirms and does not duplicate fallback windows", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "first-note",
+      title: "First note",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "second-note",
+      title: "Second note",
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]);
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    const secondStickyPage = await getStickyPageByNoteId(electronApp, "second-note");
+    await secondStickyPage.bringToFront();
+    await secondStickyPage.locator(".sticky-header-actions").hover();
+    await secondStickyPage.getByRole("button", { name: "Move note to trash" }).click();
+    const confirmDialog = secondStickyPage.getByRole("dialog", {
+      name: "Move note to trash confirmation",
+    });
+    await expect(confirmDialog).toBeVisible();
+    await expect(confirmDialog.getByText(/different from closing a sticky window/))
+      .toBeVisible();
+    await confirmDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirmDialog).toHaveCount(0);
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    await secondStickyPage.locator(".sticky-header-actions").hover();
+    await secondStickyPage.getByRole("button", { name: "Move note to trash" }).click();
+    await expect(confirmDialog).toBeVisible();
+    await confirmDialog.getByRole("button", { name: /Yes, move Second note to trash/ })
+      .click();
+
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(1);
+    await expect.poll(() => getStoredTrashState(userDataDirectory)).toEqual({
+      activeNoteIds: ["first-note"],
+      trashedNoteIds: ["second-note"],
+    });
   } finally {
     await electronApp.close();
   }
@@ -487,11 +616,13 @@ test("Electron sticky windows keep independent pin and color updates", async () 
     await expect(secondStickyPage.getByTestId("sticky-title-drag-label"))
       .toHaveCount(0);
 
-    await activateStickyEditorToolbar(firstStickyPage);
+    await firstStickyPage.bringToFront();
+    await firstStickyPage.locator(".sticky-header-actions").hover();
     await firstStickyPage.getByRole("button", { name: "Pin window" }).click();
     await expect(firstStickyPage.getByRole("button", { name: "Unpin window" }))
       .toHaveAttribute("aria-pressed", "true");
-    await activateStickyEditorToolbar(secondStickyPage);
+    await secondStickyPage.bringToFront();
+    await secondStickyPage.locator(".sticky-header-actions").hover();
     await expect(secondStickyPage.getByRole("button", { name: "Pin window" }))
       .toHaveAttribute("aria-pressed", "false");
     await expect.poll(async () => {
@@ -534,9 +665,9 @@ test("Electron sticky windows keep independent pin and color updates", async () 
       ]),
     );
 
-    await activateStickyEditorToolbar(firstStickyPage);
-    await firstStickyPage.getByRole("button", { name: "Sticky color" }).click();
-    await firstStickyPage.getByRole("button", { name: "Pastel color 5" }).click();
+    await firstStickyPage.bringToFront();
+    const firstStickySettings = await openStickySettings(firstStickyPage);
+    await firstStickySettings.getByRole("button", { name: "Pastel color 5" }).click();
     await expect(firstStickyPage.getByLabel("HEX sticky color value"))
       .toHaveValue("eadcff");
     await firstStickyPage.waitForTimeout(450);
@@ -571,11 +702,13 @@ test("Electron moves a sticky window when dragging its header", async () => {
 
     const beforeBounds = await getFirstWindowBounds(electronApp);
     const headerBox = await header.boundingBox();
-    await page.mouse.move(headerBox.x + headerBox.width - 84, headerBox.y + headerBox.height / 2);
+    const dragStartX = headerBox.x + 96;
+    const dragStartY = headerBox.y + headerBox.height / 2;
+    await page.mouse.move(dragStartX, dragStartY);
     await page.mouse.down();
     await page.mouse.move(
-      headerBox.x + headerBox.width - 12,
-      headerBox.y + headerBox.height / 2 + 36,
+      dragStartX + 72,
+      dragStartY + 36,
       { steps: 6 },
     );
     await page.mouse.up();
@@ -641,16 +774,17 @@ function writeInitialNotes(userDataDirectory, notes) {
   );
 }
 
-function readPngDimensions(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const pngSignature = "89504e470d0a1a0a";
-  if (buffer.subarray(0, 8).toString("hex") !== pngSignature) {
-    throw new Error(`Not a PNG file: ${filePath}`);
-  }
-
+function getStoredTrashState(userDataDirectory) {
+  const state = JSON.parse(
+    fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+  );
   return {
-    width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20),
+    activeNoteIds: state.notes
+      .filter((note) => !note.trashedAt)
+      .map((note) => note.id),
+    trashedNoteIds: state.notes
+      .filter((note) => note.trashedAt)
+      .map((note) => note.id),
   };
 }
 
@@ -676,19 +810,13 @@ function getOpenPages(electronApp) {
   return electronApp.windows().filter((page) => !page.isClosed());
 }
 
-async function activateStickyEditorToolbar(page) {
+async function openStickySettings(page) {
   await page.bringToFront();
-  await page.getByTestId("sticky-editor-surface").click({
-    position: {
-      x: 120,
-      y: 72,
-    },
-  });
-  const toolbar = page.getByRole("group", { name: "Editor typography" });
-  if (await toolbar.count() === 0) {
-    await page.getByRole("button", { name: "Show editor tools" }).click();
-  }
-  await expect(toolbar).toBeVisible();
+  await page.locator(".sticky-header-actions").hover();
+  await page.getByRole("button", { name: "Sticky settings" }).click();
+  const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
+  await expect(settingsPanel).toBeVisible();
+  return settingsPanel;
 }
 
 async function getPageNoteId(page) {

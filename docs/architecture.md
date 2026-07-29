@@ -2,7 +2,7 @@
 
 ## Stack
 
-- Electron for macOS desktop windows
+- Electron for desktop windows
 - React for the renderer
 - BlockNote for the editor
 - Vite for renderer build
@@ -35,7 +35,7 @@ separately at the root of `notes.json` as `appTheme.mode`. Layout mode is also a
 
 The renderer keeps a built-in font list for browser preview mode. In Electron, the preload bridge exposes `fonts:list`;
 the main process reads macOS installed font families through `system_profiler SPFontsDataType`, caches the result, and
-returns family names only. Installed fonts are stored as `local:<font family>` so the setting can survive app restart
+returns family names only. Windows and other unsupported platforms use the built-in font list only. Installed fonts are stored as `local:<font family>` so the setting can survive app restart
 without copying font files into the app.
 
 Editor defaults are app-wide preferences stored at `editorPreferences` in `notes.json`. New sessions copy those defaults
@@ -52,21 +52,21 @@ The app supports two layout modes.
 - Default size: `960 x 720`
 - Minimum size: `640 x 500`
 - `alwaysOnTop` defaults to `false`
-- transparent window background for real macOS-level note transparency
+- transparent window background for native note transparency
 - Bounds are saved on move/resize/close
 - Tab session mode keeps one primary tabs window for docked sessions
 - Sticky mode opens every session as its own compact sticky-note window when entering the mode
 - Sticky mode arranges note windows in a small grid using the current primary display work area
 - Closing an individual sticky window records it as manually closed and does not immediately recreate it
 - Show All NotePanes clears manually closed sticky windows and opens every note window again
-- `Command + T` creates a new sidebar session tab; `Command + N` remains available for new note/session
+- `Command/Ctrl + T` creates a new sidebar session tab; `Command/Ctrl + N` remains available for new note/session
 - The dashed `+` directly under the last sidebar session tab creates a new note/session in the current tabs window
 - Dragging a sidebar tab outside the sidebar detaches it into a separate window
 - A detached sticky window can be docked back into the tabs window
 - Sidebar tab close appears only on row hover and deletes a note/session when more than one session exists
-- `Command + 1` through `Command + 9` activates the matching sidebar session on macOS
-- `Command + Option + Left/Right` activates the previous/next sidebar session and wraps at the ends
-- `Command + W` deletes the current sidebar session in tab session mode instead of closing the primary window
+- `Command/Ctrl + 1` through `Command/Ctrl + 9` activates the matching sidebar session
+- `Command/Ctrl + Option/Alt + Left/Right` activates the previous/next sidebar session and wraps at the ends
+- `Command/Ctrl + W` deletes the current sidebar session in tab session mode instead of closing the primary window
 - Sidebar tab double-click starts inline rename
 
 ## BlockNote configuration
@@ -108,10 +108,10 @@ Session tab backgrounds can use each session's accent color. Active, inactive, a
 that accent plus the current Light/Dark mode. The title text color is calculated from the effective background so the
 tab remains readable in both modes.
 
-Light/Dark mode is changed through Preferences or `Command + Shift + L`; the app-wide shortcut/menu state remains global.
+Light/Dark mode is changed through Preferences or `Command/Ctrl + Shift + L`; the app-wide shortcut/menu state remains global.
 Tab and Sticky mode do not expose a persistent Light/Dark switch in the primary chrome.
 
-The Preferences panel is opened from the sidebar footer button, macOS app menu, or `Command + ,` and keeps app-wide/default settings:
+The Preferences panel is opened from the sidebar footer button, native app menu, or `Command/Ctrl + ,` and keeps app-wide/default settings:
 
 - Light/Dark app theme
 - default editor font family and size for newly created sessions

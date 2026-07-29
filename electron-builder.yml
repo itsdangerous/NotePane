@@ -14,4 +14,14 @@ mac:
     - target: zip
       arch:
         - arm64
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
 asar: true

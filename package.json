@@ -2,19 +2,21 @@
   "name": "notepane",
   "version": "0.1.0",
   "private": true,
-  "description": "A local-first macOS note pane app with tabbed sessions and sticky windows.",
+  "description": "A local-first desktop note pane app with tabbed sessions and sticky windows.",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev:web": "vite --host 127.0.0.1",
-    "dev:app": "VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "dev:app": "cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "install:browsers": "playwright install chromium",
     "build": "vite build",
-    "start": "npm run build && electron .",
+    "start": "npm run build && node scripts/run-app.mjs",
     "test:unit": "node --test tests/unit/*.test.cjs",
     "test:e2e": "playwright test",
     "verify": "npm run build && npm run test:unit && node scripts/verify-dist.mjs && npm run test:e2e",
-    "app": "npm run build && electron-builder --mac zip --config electron-builder.yml"
+    "app": "npm run build && electron-builder --config electron-builder.yml",
+    "app:mac": "npm run build && electron-builder --mac zip --config electron-builder.yml",
+    "app:win": "npm run build && electron-builder --win nsis --config electron-builder.yml"
   },
   "dependencies": {
     "@blocknote/code-block": "0.52.1",
@@ -30,6 +32,7 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@vitejs/plugin-react": "6.0.4",
+    "cross-env": "^10.1.0",
     "electron": "43.2.0",
     "electron-builder": "26.15.3",
     "vite": "8.1.5"

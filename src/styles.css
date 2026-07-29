@@ -981,7 +981,7 @@ body.theme-dark,
 .session-tab-row {
   --session-tab-row-height: 31px;
   --session-tab-index-width: 25px;
-  --session-tab-shortcut-width: 31px;
+  --session-tab-shortcut-width: 42px;
   --session-tab-text-color: var(--default-tab-text-color);
   --session-tab-inactive-text-color: color-mix(
     in srgb,
@@ -1220,7 +1220,7 @@ body.theme-dark,
 
 .session-shortcut {
   display: grid;
-  width: 25px;
+  width: 36px;
   height: 20px;
   min-width: 0;
   place-items: center;
@@ -1228,8 +1228,9 @@ body.theme-dark,
   border-radius: 0;
   background: transparent;
   color: color-mix(in srgb, currentColor 70%, transparent);
-  font: 750 10px/1 var(--notepane-ui-font);
+  font: 750 9px/1 var(--notepane-ui-font);
   text-align: center;
+  white-space: nowrap;
   transition: opacity 120ms ease;
 }
 

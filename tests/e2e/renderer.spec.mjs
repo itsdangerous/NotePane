@@ -670,7 +670,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
   expect(tabsModeButtonMetrics.buttonWidth).toBe(66);
   expect(tabsModeButtonMetrics.footerControlCount).toBe(4);
   expect(tabsModeButtonMetrics.headerLayoutButtonCount).toBe(0);
-  expect(tabsModeButtonMetrics.iconWidth).toBe(48);
+  expect(tabsModeButtonMetrics.iconWidth).toBe(58);
   expect(tabsModeButtonMetrics.iconTone).toBe("sticky");
   expect(tabsModeButtonMetrics.labelCount).toBe(0);
   expect(tabsModeButtonMetrics.targetMode).toBe("sticky");
@@ -1603,7 +1603,7 @@ test("uses transparent chrome-free styles while exporting", async ({ page }) => 
 
 test("creates and switches note sessions from the sidebar", async ({ page }) => {
   await expect(page.getByRole("tab")).toHaveCount(1);
-  await expect(page.getByText("⌘1")).toBeVisible();
+  await expect(page.getByText(displayShortcutLabel("1"))).toBeVisible();
   await page.keyboard.press(modifierShortcut("T"));
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
@@ -1611,8 +1611,8 @@ test("creates and switches note sessions from the sidebar", async ({ page }) => 
 
   await expect(page.getByRole("tab")).toHaveCount(3);
   await expect(page.getByRole("tab").nth(2)).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("⌘2")).toBeVisible();
-  await expect(page.getByText("⌘3")).toBeVisible();
+  await expect(page.getByText(displayShortcutLabel("2"))).toBeVisible();
+  await expect(page.getByText(displayShortcutLabel("3"))).toBeVisible();
   await expectNewSessionButtonBelowLastTab(page);
 
   await page.keyboard.press(modifierShortcut("1"));
@@ -2586,4 +2586,10 @@ function modifierShortcut(key) {
 
 function modifierOptionShortcut(key) {
   return `${process.platform === "darwin" ? "Meta" : "Control"}+Alt+${key}`;
+}
+
+function displayShortcutLabel(keys) {
+  return `Ctrl+${String(keys)
+    .replaceAll("⌥", "Alt+")
+    .replaceAll("⇧", "Shift+")}`;
 }

@@ -1,6 +1,6 @@
 # NotePane
 
-NotePane은 macOS용 local-first note pane 앱입니다. 하나의 창에서 session tab을 관리하는 모드와, 각 session을 개별 sticky window로 분리하는 모드를 지원합니다.
+NotePane은 local-first desktop note pane 앱입니다. 하나의 창에서 session tab을 관리하는 모드와, 각 session을 개별 sticky window로 분리하는 모드를 지원합니다.
 
 ## 목표
 
@@ -27,7 +27,7 @@ make verify
 make run
 ```
 
-`make install`은 npm 의존성과 Playwright Chromium test browser를 함께 설치합니다.
+WSL에서 `make run`을 실행하면 Windows 실행용 app folder를 만든 뒤 `NotePane.exe`를 자동으로 엽니다. Windows native shell에서 `make`가 없다면 `npm install`, `npm run install:browsers`, `npm start`를 사용하세요.
 
 개발 모드:
 
@@ -44,14 +44,15 @@ make dev-app
 make app
 ```
 
-결과물은 `release/` 아래 생성됩니다.
+현재 OS용 패키지가 `release/` 아래 생성됩니다. 명시적으로 macOS zip을 만들려면 `make app-mac`, Windows NSIS installer를 만들려면 `make app-win`을 사용합니다.
 
 ## 저장 위치
 
-Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 보통 다음 위치입니다.
+Electron `userData` 경로의 `notes.json`에 저장합니다. OS별 기본 위치는 보통 다음과 같습니다.
 
 ```text
 ~/Library/Application Support/NotePane/notes.json
+%APPDATA%\NotePane\notes.json
 ```
 
 ## 포함된 BlockNote 기능
@@ -84,16 +85,16 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - Sticky mode supports per-session pastel background color and opacity from the header settings modal
 - Sticky color/opacity carries back to the sidebar session tab color in Tab session mode
 - Dashed bottom button for new sidebar sessions
-- `Command + T` new sidebar session tab
-- `Command + 1` through `Command + 9` sidebar session switching
-- `Command + Option + Left/Right` previous/next sidebar session switching with wrap-around
-- `Command + W` closes the current tab in tab session mode
-- `Command + Shift + M` mode switch
-- `Command + Shift + L` Light/Dark toggle
-- `Command + Shift + E` export menu
+- `Command/Ctrl + T` new sidebar session tab
+- `Command/Ctrl + 1` through `Command/Ctrl + 9` sidebar session switching
+- `Command/Ctrl + Option/Alt + Left/Right` previous/next sidebar session switching with wrap-around
+- `Command/Ctrl + W` closes the current tab in tab session mode
+- `Command/Ctrl + Shift + M` mode switch
+- `Command/Ctrl + Shift + L` Light/Dark toggle
+- `Command/Ctrl + Shift + E` export menu
 - Double-click session rename
 - Hover-only session delete button
-- Light/Dark app-wide theme via sidebar Preferences or `Command + Shift + L`
+- Light/Dark app-wide theme via sidebar Preferences or `Command/Ctrl + Shift + L`
 - Sidebar tab text color customization
 - Tab color wheel
 - Color brightness/value slider that stays unchanged when the wheel color changes
@@ -111,7 +112,7 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - Sticky mode로 전환하면 각 session은 작은 sticky note 창으로 정렬됩니다.
 - Sticky mode의 header 설정 버튼에서 해당 sticky note의 pastel color/opacity와 editor 설정을 조정합니다.
 - header 좌측은 sidebar toggle 또는 sticky title, 중앙은 drag strip, 우측은 export 또는 sticky settings control을 둡니다.
-- Light/Dark 전환은 sidebar footer의 Preferences, macOS app menu Preferences, 또는 `Command + Shift + L`로 처리합니다.
+- Light/Dark 전환은 sidebar footer의 Preferences, native app menu Preferences, 또는 `Command/Ctrl + Shift + L`로 처리합니다.
 - Sticky mode에서는 header를 더 작게 유지합니다.
 - tab 색상 설정은 각 session tab 우클릭 메뉴의 Color 옵션에서 처리합니다.
 - export는 header 우측의 공유 아이콘 한 개에서 PNG/PDF를 선택합니다.
@@ -119,9 +120,9 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. macOS에서는 �
 - editor 영역은 `-webkit-app-region: no-drag`로 유지합니다.
 - 좌측 sidebar는 session tab 생성, 전환, 삭제만 담당합니다.
 - session 추가는 마지막 session tab 바로 아래의 점선 `+` 버튼으로 처리합니다.
-- session tab 오른쪽은 평상시 `Command + 숫자` 단축키를 표시하고, hover 때만 삭제 버튼을 표시합니다.
-- Tab session mode에서 `Command + W`는 창을 닫지 않고 현재 session tab을 제거합니다.
-- `Command + Option + ←/→`는 이전/다음 session tab으로 순환 이동하며, 끝에서는 반대 끝으로 wrap 됩니다.
+- session tab 오른쪽은 평상시 `Command/Ctrl + 숫자` 단축키를 표시하고, hover 때만 삭제 버튼을 표시합니다.
+- Tab session mode에서 `Command/Ctrl + W`는 창을 닫지 않고 현재 session tab을 제거합니다.
+- `Command/Ctrl + Option/Alt + ←/→`는 이전/다음 session tab으로 순환 이동하며, 끝에서는 반대 끝으로 wrap 됩니다.
 - session 이름은 sidebar tab을 더블클릭해서 inline으로 변경합니다.
 - 전체 앱 배경/텍스트/코드 색상은 Light/Dark 모드 토큰으로만 결정합니다.
 - session tab 배경색은 Light/Dark 모드와 active/inactive 상태 토큰으로만 결정합니다.

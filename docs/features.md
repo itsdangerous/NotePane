@@ -17,7 +17,7 @@
 - Session rename by double-clicking a sidebar tab
 - Hover-only session delete button in the sidebar tab row
 - Global Notion-style Light/Dark app theme via sidebar Preferences or shortcut
-- Preferences panel via sidebar footer button, macOS app menu, or `Command + ,`
+- Preferences panel via sidebar footer button, native app menu, or `Command/Ctrl + ,`
 - Default editor font family and font size customization for newly created sessions
 - Right-click session tab context menu for per-session tab color
 - Sidebar tab background/accent color customization with automatic contrast text
@@ -27,17 +27,17 @@
 - Eyedropper for session tab color when the runtime supports the browser `EyeDropper` API
 - Editable HEX/HSL/RGB/LCH session tab color values
 - Copy buttons for HEX/HSL/RGB/LCH session tab color values
-- New note/session: `Command + T` or `Command + N`
+- New note/session: `Command/Ctrl + T` or `Command/Ctrl + N`
 - New sidebar session: dashed `+` button directly under the last session tab
-- Switch sidebar sessions: `Command + 1` through `Command + 9` on macOS
-- Previous/next sidebar session: `Command + Option + Left/Right`, wrapping across the first and last tabs
-- Close current tab in tab session mode: `Command + W`
-- Show all sticky notes: `Command + Shift + 0`
-- Cycle sticky windows: `Command + Backtick`
-- Toggle always on top: `Command + Shift + P`
-- Toggle Tab/Sticky mode: `Command + Shift + M`
-- Toggle Light/Dark mode: `Command + Shift + L`
-- Open export menu: `Command + Shift + E`
+- Switch sidebar sessions: `Command/Ctrl + 1` through `Command/Ctrl + 9`
+- Previous/next sidebar session: `Command/Ctrl + Option/Alt + Left/Right`, wrapping across the first and last tabs
+- Close current tab in tab session mode: `Command/Ctrl + W`
+- Show all sticky notes: `Command/Ctrl + Shift + 0`
+- Cycle sticky windows: `Command/Ctrl + Backtick`
+- Toggle always on top: `Command/Ctrl + Shift + P`
+- Toggle Tab/Sticky mode: `Command/Ctrl + Shift + M`
+- Toggle Light/Dark mode: `Command/Ctrl + Shift + L`
+- Open export menu: `Command/Ctrl + Shift + E`
 - Delayed hover tooltips for clickable controls
 - Window bounds persistence
 - Editor area is explicitly non-drag so BlockNote mouse interactions remain intact
@@ -58,9 +58,9 @@ BlockNote handles editor interaction directly.
 - Formatting toolbar
 - Link toolbar
 - Table handles
-- `Command + A` selects all editor blocks
-- `Command + X` cuts/removes the current block when no text is selected
-- Active editor-only typography control with searchable font family dropdown, installed macOS font discovery, and 6-144px size presets/manual input
+- `Command/Ctrl + A` selects all editor blocks
+- `Command/Ctrl + X` cuts/removes the current block when no text is selected
+- Active editor-only typography control with searchable font family dropdown, installed macOS font discovery where supported, and 6-144px size presets/manual input
 
 ## Blocks
 

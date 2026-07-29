@@ -1,4 +1,4 @@
-.PHONY: help install build verify run app dev-web dev-app
+.PHONY: help install build verify run app app-mac app-win dev-web dev-app
 
 help:
 	@echo "NotePane commands"
@@ -7,7 +7,9 @@ help:
 	@echo "  make build    Build the Vite renderer"
 	@echo "  make verify   Build and run unit/static/E2E smoke checks"
 	@echo "  make run      Build and run the NotePane desktop app"
-	@echo "  make app      Build a macOS zip app package"
+	@echo "  make app      Build an app package for the current OS"
+	@echo "  make app-mac  Build a macOS zip app package"
+	@echo "  make app-win  Build a Windows NSIS app package"
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev-web  Start Vite dev server"
@@ -28,6 +30,12 @@ run:
 
 app:
 	npm run app
+
+app-mac:
+	npm run app:mac
+
+app-win:
+	npm run app:win
 
 dev-web:
 	npm run dev:web

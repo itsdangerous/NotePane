@@ -7,14 +7,22 @@ make run
 ```
 
 This builds the Vite renderer and launches Electron.
+When run from WSL, this creates `release/win-unpacked/` and launches the Windows `NotePane.exe` directly.
 
-## macOS package
+## App Packages
 
 ```bash
-make app
+npm run app
 ```
 
-The package is created by `electron-builder` using `electron-builder.yml`.
+This creates a package for the current OS using `electron-builder.yml`.
+
+Platform-specific package commands:
+
+```bash
+npm run app:mac
+npm run app:win
+```
 
 Output:
 
@@ -35,3 +43,14 @@ Before public distribution:
 - Notarize with Apple
 - Staple notarization ticket
 - Update cask URL and SHA-256
+
+## Windows Distribution
+
+`npm run app:win` creates an NSIS installer in `release/`.
+Run it on Windows, or install Wine first when cross-building from Linux/WSL.
+
+Before public distribution:
+
+- Confirm final `appId`
+- Confirm Windows icon conversion from `build/icon.png`
+- Sign with a Windows code signing certificate

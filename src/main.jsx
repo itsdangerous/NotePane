@@ -3025,16 +3025,16 @@ function EditorPreferencesSection({
 }
 
 const PREFERENCE_SHORTCUT_ROWS = [
-  ["New session", "⌘T"],
-  ["Close current tab", "⌘W"],
-  ["Previous tab", "⌘⌥←"],
-  ["Next tab", "⌘⌥→"],
-  ["Toggle tabs / sticky", "⌘⇧M"],
-  ["Toggle light / dark", "⌘⇧L"],
-  ["Export", "⌘⇧E"],
-  ["Preferences", "⌘,"],
-  ["Editor font up", "⌘+"],
-  ["Editor font down", "⌘-"],
+  ["New session", "T"],
+  ["Close current tab", "W"],
+  ["Previous tab", "⌥←"],
+  ["Next tab", "⌥→"],
+  ["Toggle tabs / sticky", "⇧M"],
+  ["Toggle light / dark", "⇧L"],
+  ["Export", "⇧E"],
+  ["Preferences", ","],
+  ["Editor font up", "+"],
+  ["Editor font down", "-"],
 ];
 
 function KeyboardShortcutsSection() {
@@ -3048,7 +3048,7 @@ function KeyboardShortcutsSection() {
         {PREFERENCE_SHORTCUT_ROWS.map(([label, shortcut]) => (
           <div className="shortcut-row" role="listitem" key={label}>
             <span>{label}</span>
-            <kbd>{shortcut}</kbd>
+            <kbd>{getShortcutLabel(shortcut)}</kbd>
           </div>
         ))}
       </div>
@@ -4352,11 +4352,28 @@ function formatTrashTimestamp(value) {
 }
 
 function getSessionShortcutLabel(index) {
-  return `⌘${index + 1}`;
+  return getShortcutLabel(String(index + 1));
 }
 
 function getShortcutLabel(keys) {
-  return `⌘${keys}`;
+  const normalizedKeys = String(keys);
+  if (!isWindowsRuntime()) {
+    return `⌘${normalizedKeys}`;
+  }
+
+  return `Ctrl+${normalizedKeys
+    .replaceAll("⌥", "Alt+")
+    .replaceAll("⇧", "Shift+")}`;
+}
+
+function isWindowsRuntime() {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const platform = navigator.platform ?? "";
+  const userAgent = navigator.userAgent ?? "";
+  return /^win/i.test(platform) || /\bwindows\b/i.test(userAgent);
 }
 
 const FLOATING_EDITOR_MENU_MARGIN = 8;

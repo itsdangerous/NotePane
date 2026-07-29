@@ -29,9 +29,11 @@ import {
   PanelLeftOpen,
   PanelTopClose,
   Pin,
+  Plus,
   RotateCcw,
   TableOfContents as TableOfContentsIcon,
   Trash2,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
@@ -2443,7 +2445,11 @@ function StickyEditor({
                           >
                             <span className="session-index-label">{index + 1}</span>
                             <span className="session-index-delete" aria-hidden="true">
-                              ×
+                              <X
+                                className="session-index-delete-icon"
+                                size={14}
+                                strokeWidth={2.25}
+                              />
                             </span>
                           </button>
                           <button
@@ -2487,7 +2493,12 @@ function StickyEditor({
                 onMouseDown={preventFocusLoss}
                 onClick={() => void onCreateNote()}
               >
-                <span aria-hidden="true">＋</span>
+                <Plus
+                  className="session-add-icon"
+                  aria-hidden="true"
+                  size={14}
+                  strokeWidth={2.4}
+                />
                 <span>New session</span>
               </button>
             </div>

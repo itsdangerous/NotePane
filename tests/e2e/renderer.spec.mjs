@@ -1795,6 +1795,7 @@ test("resizes and collapses the sidebar from its right edge", async ({ page }) =
 
 test("keeps the new session control aligned with session rows", async ({ page }) => {
   await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.locator(".session-tab-row.is-entering")).toHaveCount(0);
 
   const metrics = await page.evaluate(() => {
     const rows = [...document.querySelectorAll(".session-tab-row")];
@@ -1804,6 +1805,16 @@ test("keeps the new session control aligned with session rows", async ({ page })
     const rowRect = firstRow.getBoundingClientRect();
     const lastRowRect = lastRow.getBoundingClientRect();
     const addRect = addButton.getBoundingClientRect();
+    const secondRow = rows[1];
+    const titleRect = secondRow.querySelector(".session-name").getBoundingClientRect();
+    const indexRect = secondRow.querySelector(".session-index-label").getBoundingClientRect();
+    const deleteRect = secondRow.querySelector(".session-index-delete").getBoundingClientRect();
+    const shortcutRect = secondRow.querySelector(".session-shortcut").getBoundingClientRect();
+    const addIconRect = addButton.querySelector(".session-add-icon").getBoundingClientRect();
+    const addTextRect = addButton.querySelector("span").getBoundingClientRect();
+    const centerY = (rect) => rect.top + rect.height / 2;
+    const secondRowCenterY = centerY(secondRow.getBoundingClientRect());
+    const addCenterY = centerY(addRect);
 
     return {
       rowLeft: Math.round(rowRect.left),
@@ -1813,6 +1824,12 @@ test("keeps the new session control aligned with session rows", async ({ page })
       rowHeight: Math.round(rowRect.height),
       addHeight: Math.round(addRect.height),
       addTopGap: Math.round(addRect.top - lastRowRect.bottom),
+      addIconCenterDelta: Math.abs(centerY(addIconRect) - addCenterY),
+      addTextCenterDelta: Math.abs(centerY(addTextRect) - addCenterY),
+      deleteCenterDelta: Math.abs(centerY(deleteRect) - secondRowCenterY),
+      indexCenterDelta: Math.abs(centerY(indexRect) - secondRowCenterY),
+      shortcutCenterDelta: Math.abs(centerY(shortcutRect) - secondRowCenterY),
+      titleCenterDelta: Math.abs(centerY(titleRect) - secondRowCenterY),
     };
   });
 
@@ -1821,6 +1838,12 @@ test("keeps the new session control aligned with session rows", async ({ page })
   expect(metrics.addHeight).toBeGreaterThanOrEqual(metrics.rowHeight);
   expect(metrics.addTopGap).toBeGreaterThanOrEqual(8);
   expect(metrics.addTopGap).toBeLessThanOrEqual(14);
+  expect(metrics.addIconCenterDelta).toBeLessThanOrEqual(1);
+  expect(metrics.addTextCenterDelta).toBeLessThanOrEqual(1);
+  expect(metrics.deleteCenterDelta).toBeLessThanOrEqual(1);
+  expect(metrics.indexCenterDelta).toBeLessThanOrEqual(1);
+  expect(metrics.shortcutCenterDelta).toBeLessThanOrEqual(1);
+  expect(metrics.titleCenterDelta).toBeLessThanOrEqual(1);
 });
 
 test("keeps the sticky header draggable without title chrome", async ({ page }) => {

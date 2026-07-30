@@ -10,10 +10,12 @@ const {
   ipcMain,
   shell,
   dialog,
-  nativeImage,
   screen,
 } = require("electron");
-const { StickyStore } = require("./store.cjs");
+const {
+  StickyStore,
+  DEFAULT_KEYBOARD_SHORTCUTS,
+} = require("./store.cjs");
 
 const APP_NAME = "NotePane";
 const execFileAsync = promisify(execFile);
@@ -29,6 +31,7 @@ const STICKY_WINDOW_MARGIN = 28;
 const TRAFFIC_LIGHT_X = 14;
 const TABS_TRAFFIC_LIGHT_Y = 15;
 const STICKY_TRAFFIC_LIGHT_Y = 10;
+const LAYOUT_MODE_TRANSITION_READY_TIMEOUT_MS = 4500;
 const STICKY_PASTEL_PALETTE = [
   "#fff2b8",
   "#ffd7e8",
@@ -88,7 +91,9 @@ function createWindow(note, options = {}) {
     primary: Boolean(options.primary),
   });
 
+  window.__notepaneReadyToShow = false;
   window.once("ready-to-show", () => {
+    window.__notepaneReadyToShow = true;
     window.show();
     window.focus();
   });
@@ -208,13 +213,7 @@ function closeFocusedTabOrWindow() {
     return;
   }
 
-  const entry = windows.get(window.id);
-  if (store.getLayoutMode() !== "tabs" || !entry?.primary) {
-    window.close();
-    return;
-  }
-
-  closeTabSession(entry.noteId);
+  window.close();
 }
 
 function closeTabSession(noteId) {
@@ -305,6 +304,14 @@ function broadcastLayoutMode(layoutMode) {
   }
 }
 
+function broadcastLayoutModeTransition(payload) {
+  for (const { window } of windows.values()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send("layout-mode:transition", payload);
+    }
+  }
+}
+
 function broadcastEditorPreferences(editorPreferences) {
   for (const { window } of windows.values()) {
     if (!window.isDestroyed()) {
@@ -387,6 +394,45 @@ function ensureTabsWindow(activeNoteId) {
   return createWindow(note, { primary: true });
 }
 
+function waitForWindowReadyToShow(window, timeoutMs = LAYOUT_MODE_TRANSITION_READY_TIMEOUT_MS) {
+  if (!window || window.isDestroyed() || window.__notepaneReadyToShow || window.isVisible()) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    let timeoutId = null;
+
+    const finish = () => {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (!window.isDestroyed()) {
+        window.removeListener("ready-to-show", finish);
+        window.webContents.removeListener("did-finish-load", finish);
+        window.webContents.removeListener("did-fail-load", finish);
+      }
+      resolve();
+    };
+
+    timeoutId = setTimeout(finish, timeoutMs);
+    window.once("ready-to-show", finish);
+    window.webContents.once("did-finish-load", finish);
+    window.webContents.once("did-fail-load", finish);
+  });
+}
+
+async function waitForWindowsReadyToShow(targetWindows) {
+  const uniqueWindows = [...new Set(targetWindows)]
+    .filter((window) => window && !window.isDestroyed());
+
+  await Promise.all(uniqueWindows.map((window) => waitForWindowReadyToShow(window)));
+}
+
 function ensureWindowForNote(note) {
   const existing = getEntriesForNote(note.id)
     .find((entry) => !entry.primary);
@@ -452,6 +498,7 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
   const notes = store.listNotes();
   const noteIds = new Set(notes.map((note) => note.id));
   const layoutMode = store.getLayoutMode();
+  const targetWindows = new Set();
 
   for (const entry of [...windows.values()]) {
     if (!noteIds.has(entry.noteId)) {
@@ -469,6 +516,7 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
       entry.primary = false;
       entry.window.setMinimumSize(STICKY_MIN_WIDTH, STICKY_MIN_HEIGHT);
       applyWindowChrome(entry.window, false);
+      targetWindows.add(entry.window);
     }
     for (const note of notes) {
       if (
@@ -477,21 +525,30 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
       ) {
         continue;
       }
-      ensureWindowForNote(note);
+      const window = ensureWindowForNote(note);
+      if (window) {
+        targetWindows.add(window);
+      }
     }
     if (options.arrangeStickyWindows) {
       arrangeStickyWindows(notes);
     }
-    return;
+    return [...targetWindows];
   }
 
   const primaryWindow = ensureTabsWindow(activeNoteId);
   const primaryId = primaryWindow?.id;
+  if (primaryWindow) {
+    targetWindows.add(primaryWindow);
+  }
   const detachedIds = new Set(notes.filter((note) => note.detached).map((note) => note.id));
 
   for (const note of notes) {
     if (note.detached) {
-      ensureWindowForNote(note);
+      const window = ensureWindowForNote(note);
+      if (window) {
+        targetWindows.add(window);
+      }
     }
   }
 
@@ -506,6 +563,49 @@ function syncWindowsForLayoutMode(activeNoteId, options = {}) {
     const shouldRemainDetached = note && detachedIds.has(note.id);
     if (!shouldRemainDetached) {
       closeWindowEntry(entry);
+    }
+  }
+
+  return [...targetWindows];
+}
+
+async function updateLayoutMode(layoutMode, options = {}) {
+  const previousLayoutMode = store.getLayoutMode();
+  const nextLayoutMode = store.updateLayoutMode(layoutMode);
+  const isChangingMode = previousLayoutMode !== nextLayoutMode;
+  const activeNoteId = options.activeNoteId;
+
+  if (isChangingMode) {
+    broadcastLayoutModeTransition({
+      phase: "start",
+      sourceMode: previousLayoutMode,
+      targetMode: nextLayoutMode,
+      noteCount: store.listNotes().length,
+    });
+  }
+
+  try {
+    if (nextLayoutMode === "sticky") {
+      manuallyClosedStickyNoteIds.clear();
+    }
+    buildMenu();
+    const targetWindows = syncWindowsForLayoutMode(activeNoteId, {
+      reopenClosedStickyWindows: nextLayoutMode === "sticky",
+      arrangeStickyWindows:
+        previousLayoutMode !== "sticky" && nextLayoutMode === "sticky",
+    });
+    broadcastLayoutMode(nextLayoutMode);
+    broadcastNotesChanged();
+    await waitForWindowsReadyToShow(targetWindows ?? []);
+    return nextLayoutMode;
+  } finally {
+    if (isChangingMode) {
+      broadcastLayoutModeTransition({
+        phase: "finish",
+        sourceMode: previousLayoutMode,
+        targetMode: nextLayoutMode,
+        noteCount: store.listNotes().length,
+      });
     }
   }
 }
@@ -559,6 +659,7 @@ function arrangeStickyWindows(notes) {
 }
 
 function buildMenu() {
+  const isTabsMode = store?.getLayoutMode?.() !== "sticky";
   const template = [
     {
       label: app.name,
@@ -567,7 +668,7 @@ function buildMenu() {
         { type: "separator" },
         {
           label: "Preferences",
-          accelerator: "CommandOrControl+,",
+          accelerator: getMenuAccelerator("preferences"),
           click: openPreferences,
         },
         { type: "separator" },
@@ -583,18 +684,18 @@ function buildMenu() {
       submenu: [
         {
           label: "New Tab",
-          accelerator: "CommandOrControl+T",
+          accelerator: isTabsMode ? getMenuAccelerator("newSession") : undefined,
           click: createNewNoteWindow,
         },
         {
           label: "New Note",
-          accelerator: "CommandOrControl+N",
+          accelerator: isTabsMode ? getMenuAccelerator("newNote") : undefined,
           click: createNewNoteWindow,
         },
         { type: "separator" },
         {
-          label: "Close Tab / Window",
-          accelerator: "CommandOrControl+W",
+          label: "Close Window",
+          accelerator: getMenuAccelerator("closeWindow"),
           click: closeFocusedTabOrWindow,
         },
       ],
@@ -634,25 +735,15 @@ function buildMenu() {
         },
         {
           label: "Toggle Tabs / Sticky Mode",
-          accelerator: "CommandOrControl+Shift+M",
+          accelerator: getMenuAccelerator("toggleLayoutMode"),
           click: () => {
-            const previousMode = store.getLayoutMode();
-            const nextMode = previousMode === "tabs" ? "sticky" : "tabs";
-            store.updateLayoutMode(nextMode);
-            if (nextMode === "sticky") {
-              manuallyClosedStickyNoteIds.clear();
-            }
-            syncWindowsForLayoutMode(undefined, {
-              reopenClosedStickyWindows: nextMode === "sticky",
-              arrangeStickyWindows: previousMode !== "sticky" && nextMode === "sticky",
-            });
-            broadcastLayoutMode(nextMode);
-            broadcastNotesChanged();
+            const nextMode = store.getLayoutMode() === "tabs" ? "sticky" : "tabs";
+            void updateLayoutMode(nextMode);
           },
         },
         {
           label: "Toggle Always On Top",
-          accelerator: "CommandOrControl+Shift+P",
+          accelerator: getMenuAccelerator("toggleAlwaysOnTop"),
           click: toggleFocusedAlwaysOnTop,
         },
         { type: "separator" },
@@ -663,6 +754,45 @@ function buildMenu() {
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function getMenuAccelerator(commandId) {
+  const shortcut =
+    store?.getEditorPreferences?.().keyboardShortcuts?.[commandId] ??
+    DEFAULT_KEYBOARD_SHORTCUTS[commandId];
+
+  return electronAcceleratorForShortcut(shortcut);
+}
+
+function electronAcceleratorForShortcut(shortcut) {
+  if (typeof shortcut !== "string" || shortcut.trim() === "") {
+    return undefined;
+  }
+
+  return shortcut
+    .split("+")
+    .map((token) => {
+      if (token === "Mod") {
+        return "CommandOrControl";
+      }
+      if (token === "ArrowLeft") {
+        return "Left";
+      }
+      if (token === "ArrowRight") {
+        return "Right";
+      }
+      if (token === "ArrowUp") {
+        return "Up";
+      }
+      if (token === "ArrowDown") {
+        return "Down";
+      }
+      if (token === "=") {
+        return "Plus";
+      }
+      return token;
+    })
+    .join("+");
 }
 
 function persistWindowBounds(window) {
@@ -706,20 +836,10 @@ function installIpcHandlers() {
     return store.getLayoutMode();
   });
 
-  ipcMain.handle("layout-mode:update", (_event, layoutMode) => {
-    const previousLayoutMode = store.getLayoutMode();
-    const nextLayoutMode = store.updateLayoutMode(layoutMode);
-    if (nextLayoutMode === "sticky") {
-      manuallyClosedStickyNoteIds.clear();
-    }
-    syncWindowsForLayoutMode(getNoteIdForWebContents(_event.sender), {
-      reopenClosedStickyWindows: nextLayoutMode === "sticky",
-      arrangeStickyWindows:
-        previousLayoutMode !== "sticky" && nextLayoutMode === "sticky",
+  ipcMain.handle("layout-mode:update", async (_event, layoutMode) => {
+    return updateLayoutMode(layoutMode, {
+      activeNoteId: getNoteIdForWebContents(_event.sender),
     });
-    broadcastLayoutMode(nextLayoutMode);
-    broadcastNotesChanged();
-    return nextLayoutMode;
   });
 
   ipcMain.handle("editor-preferences:get", () => {
@@ -728,6 +848,7 @@ function installIpcHandlers() {
 
   ipcMain.handle("editor-preferences:update", (_event, payload) => {
     const editorPreferences = store.updateEditorPreferences(payload);
+    buildMenu();
     broadcastEditorPreferences(editorPreferences);
     return editorPreferences;
   });
@@ -757,6 +878,21 @@ function installIpcHandlers() {
     }
     broadcastNotesChanged({ activeNote: note });
     return note;
+  });
+
+  ipcMain.handle("notes:reorder", (event, noteIds) => {
+    const result = store.reorderNotes(noteIds);
+    const currentNoteId = getNoteIdForWebContents(event.sender);
+    const activeNote =
+      (currentNoteId ? store.getNote(currentNoteId) : null) ??
+      getMainTabsNote();
+
+    broadcastNotesChanged({ activeNote });
+
+    return {
+      ...result,
+      activeNote,
+    };
   });
 
   ipcMain.handle("notes:delete", (event, noteId) => {
@@ -862,6 +998,16 @@ function installIpcHandlers() {
     }
 
     const entry = windows.get(window.id);
+    if (
+      store.getLayoutMode() === "sticky" &&
+      entry &&
+      !entry.primary &&
+      entry.noteId &&
+      entry.noteId !== note.id
+    ) {
+      return store.getNote(entry.noteId);
+    }
+
     if (entry?.noteId) {
       store.updateBounds(entry.noteId, window.getBounds());
       entry.noteId = note.id;
@@ -1292,11 +1438,6 @@ function clamp(value, minimum, maximum) {
 app.whenReady().then(() => {
   app.name = APP_NAME;
   app.setName(APP_NAME);
-
-  const dockIcon = nativeImage.createFromPath(ICON_PNG_PATH);
-  if (process.platform === "darwin" && !dockIcon.isEmpty()) {
-    app.dock?.setIcon(dockIcon);
-  }
 
   store = new StickyStore(app.getPath("userData"));
   installIpcHandlers();

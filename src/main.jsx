@@ -23,6 +23,7 @@ import {
   Cog,
   Copy,
   Ellipsis,
+  Eye,
   FileDown,
   Palette,
   PanelLeftClose,
@@ -254,10 +255,31 @@ const EDITOR_FONT_SIZE_PRESETS = [
   144,
 ];
 const DEFAULT_EDITOR_FONT_FAMILY = "system";
+const DEFAULT_KEYBOARD_SHORTCUTS = {
+  newSession: "Mod+T",
+  newNote: "Mod+N",
+  closeWindow: "Mod+W",
+  focusEditor: "Mod+Enter",
+  previousTab: "Mod+Alt+ArrowLeft",
+  nextTab: "Mod+Alt+ArrowRight",
+  moveTabLeft: "Mod+Shift+ArrowLeft",
+  moveTabRight: "Mod+Shift+ArrowRight",
+  toggleSidebar: "Mod+Shift+B",
+  toggleLayoutMode: "Mod+Shift+M",
+  toggleThemeMode: "Mod+Shift+L",
+  exportPdf: "Mod+Shift+E",
+  preferences: "Mod+,",
+  increaseEditorFontSize: "Mod+=",
+  decreaseEditorFontSize: "Mod+-",
+  attachDetachedNote: "Mod+Shift+D",
+  toggleAlwaysOnTop: "Mod+Shift+P",
+};
+const KEYBOARD_SHORTCUT_COMMAND_IDS = Object.keys(DEFAULT_KEYBOARD_SHORTCUTS);
 const DEFAULT_EDITOR_PREFERENCES = {
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
   showTableOfContents: false,
+  keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
 };
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_BUILTIN_FONT_FAMILY_OPTIONS = [
@@ -349,6 +371,7 @@ const EDITOR_BUILTIN_FONT_FAMILY_OPTIONS = [
 ];
 const SESSION_TAB_ENTER_MS = 190;
 const SESSION_TAB_EXIT_MS = 170;
+const SESSION_TAB_REORDER_ANIMATION_MS = 180;
 const seenSessionTabIds = new Set();
 let sessionTabAnimationsPrimed = false;
 const MODE_TAB_TEXT_DEFAULTS = {
@@ -394,7 +417,9 @@ const SIDEBAR_MAX_WIDTH = 340;
 const SIDEBAR_COLLAPSE_WIDTH = 124;
 const SIDEBAR_COMPACT_WIDTH = 64;
 const EXPORT_TOAST_TIMEOUT_MS = 2600;
+const TRASH_UNDO_TOAST_TIMEOUT_MS = 5200;
 const FONT_SIZE_TOAST_TIMEOUT_MS = 1400;
+const LAYOUT_TRANSITION_TIMEOUT_MS = 6500;
 
 function App() {
   const [note, setNote] = useState(null);
@@ -408,6 +433,75 @@ function App() {
   );
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [sessionUndoToast, setSessionUndoToast] = useState(null);
+  const [layoutTransition, setLayoutTransition] = useState(null);
+  const sessionUndoToastTimerRef = useRef(null);
+  const layoutTransitionTimerRef = useRef(null);
+
+  const clearLayoutTransition = useCallback(() => {
+    if (layoutTransitionTimerRef.current) {
+      window.clearTimeout(layoutTransitionTimerRef.current);
+      layoutTransitionTimerRef.current = null;
+    }
+    setLayoutTransition(null);
+  }, []);
+
+  const showLayoutTransition = useCallback(
+    (payload = {}) => {
+      if (layoutTransitionTimerRef.current) {
+        window.clearTimeout(layoutTransitionTimerRef.current);
+        layoutTransitionTimerRef.current = null;
+      }
+
+      setLayoutTransition({
+        sourceMode: normalizeLayoutMode(payload.sourceMode),
+        targetMode: normalizeLayoutMode(payload.targetMode),
+        noteCount: Number.isFinite(payload.noteCount)
+          ? payload.noteCount
+          : notes.length,
+      });
+      layoutTransitionTimerRef.current = window.setTimeout(() => {
+        setLayoutTransition(null);
+        layoutTransitionTimerRef.current = null;
+      }, LAYOUT_TRANSITION_TIMEOUT_MS);
+    },
+    [notes.length],
+  );
+
+  const hideSessionUndoToast = useCallback(() => {
+    if (sessionUndoToastTimerRef.current) {
+      window.clearTimeout(sessionUndoToastTimerRef.current);
+      sessionUndoToastTimerRef.current = null;
+    }
+    setSessionUndoToast(null);
+  }, []);
+
+  const showSessionMovedToTrashToast = useCallback(({ noteId, title }) => {
+    if (sessionUndoToastTimerRef.current) {
+      window.clearTimeout(sessionUndoToastTimerRef.current);
+      sessionUndoToastTimerRef.current = null;
+    }
+
+    setSessionUndoToast({
+      noteId,
+      title: normalizeTitle(title),
+    });
+    sessionUndoToastTimerRef.current = window.setTimeout(() => {
+      setSessionUndoToast(null);
+      sessionUndoToastTimerRef.current = null;
+    }, TRASH_UNDO_TOAST_TIMEOUT_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (sessionUndoToastTimerRef.current) {
+        window.clearTimeout(sessionUndoToastTimerRef.current);
+      }
+      if (layoutTransitionTimerRef.current) {
+        window.clearTimeout(layoutTransitionTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -426,11 +520,12 @@ function App() {
           seedDemoContent: true,
           editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
           editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
-          detached: false,
-          trashedAt: null,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
+	          detached: false,
+	          trashedAt: null,
+	          sortOrder: notes.length + 1,
+	          createdAt: Date.now(),
+	          updatedAt: Date.now(),
+	        };
         setNotes([previewNote]);
         setTrashedNotes([]);
         setNote(previewNote);
@@ -501,6 +596,19 @@ function App() {
       setLayoutMode(normalizeLayoutMode(nextLayoutMode));
     });
   }, []);
+
+  useEffect(() => {
+    return electronApi?.onLayoutModeTransition?.((payload) => {
+      if (payload?.phase === "start") {
+        showLayoutTransition(payload);
+        return;
+      }
+
+      if (payload?.phase === "finish") {
+        clearLayoutTransition();
+      }
+    });
+  }, [clearLayoutTransition, showLayoutTransition]);
 
   useEffect(() => {
     return electronApi?.onNotesChanged?.((payload) => {
@@ -585,18 +693,51 @@ function App() {
     setNotes((currentNotes) => mergeNotes(currentNotes, nextNote));
 
     if (electronApi) {
+      const currentLayoutMode = normalizeLayoutMode(
+        await electronApi.getLayoutMode?.() ?? layoutMode,
+      );
+      if (currentLayoutMode === "sticky") {
+        return nextNote;
+      }
+
       const activatedNote = await electronApi.activateNote(nextNote.id);
       setNote(activatedNote ?? nextNote);
       return;
     }
 
     setNote(nextNote);
-  }, [editorPreferences]);
+  }, [editorPreferences, layoutMode, notes.length]);
+
+  const reorderNotes = useCallback(
+    async (orderedNoteIds, options = {}) => {
+      const shouldPersist = options.persist !== false;
+      setNotes((currentNotes) => reorderNotesByIds(currentNotes, orderedNoteIds));
+
+      if (!electronApi || !shouldPersist) {
+        return null;
+      }
+
+      const result = await electronApi.reorderNotes?.(orderedNoteIds);
+      if (Array.isArray(result?.notes)) {
+        setNotes(result.notes);
+      }
+      if (result?.activeNote) {
+        setNote(result.activeNote);
+      }
+      return result;
+    },
+    [],
+  );
 
   const deleteSidebarNote = useCallback(
     async (noteId, noteSnapshot = null) => {
       if (notes.length <= 1) {
-        return;
+        return {
+          deleted: false,
+          notes,
+          trash: trashedNotes,
+          activeNote: note,
+        };
       }
 
       if (electronApi) {
@@ -620,7 +761,7 @@ function App() {
         if (nextNote) {
           setNote(nextNote);
         }
-        return;
+        return result;
       }
 
       const storedDeletedNote = notes.find((candidate) => candidate.id === noteId);
@@ -629,7 +770,12 @@ function App() {
           ? { ...storedDeletedNote, ...noteSnapshot }
           : storedDeletedNote;
       if (!deletedNote) {
-        return;
+        return {
+          deleted: false,
+          notes,
+          trash: trashedNotes,
+          activeNote: note,
+        };
       }
       const deletedNoteIndex = notes.findIndex((candidate) => candidate.id === noteId);
       const nextNotes = notes.filter((candidate) => candidate.id !== noteId);
@@ -645,15 +791,26 @@ function App() {
       setTrashedNotes((currentTrashedNotes) =>
         mergeTrashedNotes(currentTrashedNotes, trashedNote),
       );
-      if (note?.id === noteId) {
-        setNote(nextNotes[deletedNoteIndex] ?? nextNotes[deletedNoteIndex - 1] ?? null);
+      const nextNote =
+        note?.id === noteId
+          ? nextNotes[deletedNoteIndex] ?? nextNotes[deletedNoteIndex - 1] ?? null
+          : note;
+      if (nextNote) {
+        setNote(nextNote);
       }
+
+      return {
+        deleted: true,
+        notes: nextNotes,
+        trash: mergeTrashedNotes(trashedNotes, trashedNote),
+        activeNote: nextNote,
+      };
     },
-    [note, notes],
+    [note, notes, trashedNotes],
   );
 
   const restoreTrashedNote = useCallback(
-    async (noteId) => {
+    async (noteId, options = {}) => {
       if (electronApi) {
         const result = await electronApi.restoreNote?.(noteId);
         const nextNotes = Array.isArray(result?.notes)
@@ -662,7 +819,11 @@ function App() {
         const nextTrashedNotes = Array.isArray(result?.trash)
           ? result.trash
           : await electronApi.listTrash?.();
-        const nextNote = result?.activeNote ?? result?.note ?? nextNotes[0] ?? null;
+        const restoredNote = result?.note ?? nextNotes.find((candidate) => candidate.id === noteId);
+        const nextNote =
+          options.activate && restoredNote
+            ? await electronApi.activateNote(restoredNote.id)
+            : result?.activeNote ?? restoredNote ?? nextNotes[0] ?? null;
 
         setNotes(nextNotes);
         if (Array.isArray(nextTrashedNotes)) {
@@ -671,7 +832,10 @@ function App() {
         if (nextNote) {
           setNote(nextNote);
         }
-        return;
+        return {
+          ...result,
+          activeNote: nextNote,
+        };
       }
 
       const restoredNote = trashedNotes.find((candidate) => candidate.id === noteId);
@@ -690,10 +854,29 @@ function App() {
         currentTrashedNotes.filter((candidate) => candidate.id !== noteId),
       );
       setNotes((currentNotes) => mergeNotes(currentNotes, activeNote));
-      setNote((currentNote) => currentNote ?? activeNote);
+      if (options.activate) {
+        setNote(activeNote);
+      } else {
+        setNote((currentNote) => currentNote ?? activeNote);
+      }
+      return {
+        restored: true,
+        note: activeNote,
+        activeNote,
+      };
     },
     [trashedNotes],
   );
+
+  const undoSessionMoveToTrash = useCallback(async () => {
+    const noteId = sessionUndoToast?.noteId;
+    if (!noteId) {
+      return;
+    }
+
+    hideSessionUndoToast();
+    await restoreTrashedNote(noteId, { activate: true });
+  }, [hideSessionUndoToast, restoreTrashedNote, sessionUndoToast?.noteId]);
 
   const purgeTrashedNote = useCallback(
     async (noteId) => {
@@ -737,10 +920,33 @@ function App() {
   }, []);
 
   const updateLayoutMode = useCallback(async (mode) => {
+    const previousLayoutMode = normalizeLayoutMode(layoutMode);
     const nextLayoutMode = normalizeLayoutMode(mode);
+    const isChangingMode = previousLayoutMode !== nextLayoutMode;
+
+    if (isChangingMode) {
+      showLayoutTransition({
+        sourceMode: previousLayoutMode,
+        targetMode: nextLayoutMode,
+        noteCount: notes.length,
+      });
+    }
+
     setLayoutMode(nextLayoutMode);
-    await electronApi?.updateLayoutMode?.(nextLayoutMode);
-  }, []);
+    try {
+      const resolvedLayoutMode = await electronApi?.updateLayoutMode?.(nextLayoutMode);
+      if (resolvedLayoutMode) {
+        setLayoutMode(normalizeLayoutMode(resolvedLayoutMode));
+      }
+    } catch (error) {
+      setLayoutMode(previousLayoutMode);
+      console.error("Layout mode update failed", error);
+    } finally {
+      if (isChangingMode) {
+        clearLayoutTransition();
+      }
+    }
+  }, [clearLayoutTransition, layoutMode, notes.length, showLayoutTransition]);
 
   const updateEditorPreferences = useCallback(async (nextEditorPreferences) => {
     const normalizedEditorPreferences =
@@ -782,31 +988,48 @@ function App() {
   }
 
   return (
-    <StickyEditor
-      key={note.id}
-      note={note}
-      notes={notes}
-      trashedNotes={trashedNotes}
-      appTheme={appTheme}
-      layoutMode={layoutMode}
-      isSidebarOpen={isSidebarOpen}
-      setIsSidebarOpen={setIsSidebarOpen}
-      sidebarWidth={sidebarWidth}
-      setSidebarWidth={setSidebarWidth}
-      onCreateNote={createSidebarNote}
-      onDeleteNote={deleteSidebarNote}
-      onRestoreTrashedNote={restoreTrashedNote}
-      onPurgeTrashedNote={purgeTrashedNote}
-      onSelectNote={selectNote}
-      onNoteChanged={updateNoteInList}
-      onAppThemeModeChanged={updateAppThemeMode}
-      onLayoutModeChanged={updateLayoutMode}
-      onDetachNote={detachNote}
-      onAttachNote={attachNote}
-      installedFontFamilies={installedFontFamilies}
-      editorPreferences={editorPreferences}
-      onEditorPreferencesChanged={updateEditorPreferences}
-    />
+    <>
+      <StickyEditor
+        key={note.id}
+        note={note}
+        notes={notes}
+        trashedNotes={trashedNotes}
+        appTheme={appTheme}
+        layoutMode={layoutMode}
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        sidebarWidth={sidebarWidth}
+        setSidebarWidth={setSidebarWidth}
+        onCreateNote={createSidebarNote}
+        onDeleteNote={deleteSidebarNote}
+        onRestoreTrashedNote={restoreTrashedNote}
+        onPurgeTrashedNote={purgeTrashedNote}
+        onSelectNote={selectNote}
+        onNoteChanged={updateNoteInList}
+        onAppThemeModeChanged={updateAppThemeMode}
+        onLayoutModeChanged={updateLayoutMode}
+        onDetachNote={detachNote}
+        onAttachNote={attachNote}
+        onReorderNotes={reorderNotes}
+        onSessionMovedToTrash={showSessionMovedToTrashToast}
+        installedFontFamilies={installedFontFamilies}
+        editorPreferences={editorPreferences}
+        onEditorPreferencesChanged={updateEditorPreferences}
+        layoutTransition={layoutTransition}
+      />
+      {sessionUndoToast && (
+        <StickyToast
+          toast={{
+            message: `${sessionUndoToast.title} moved to Trash.`,
+            tone: "success",
+            action: {
+              label: "Undo",
+              onClick: () => void undoSessionMoveToTrash(),
+            },
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -830,9 +1053,12 @@ function StickyEditor({
   onLayoutModeChanged,
   onDetachNote,
   onAttachNote,
+  onReorderNotes,
+  onSessionMovedToTrash,
   installedFontFamilies,
   editorPreferences,
   onEditorPreferencesChanged,
+  layoutTransition,
 }) {
   const parsedStoredBlocks = useMemo(
     () => parseBlocksJSON(note.blocksJSON),
@@ -850,6 +1076,7 @@ function StickyEditor({
   const editor = useCreateBlockNote({
     schema,
     initialContent: initialEditorContent,
+    tabBehavior: "prefer-indent",
     tables: {
       splitCells: true,
       cellBackgroundColor: true,
@@ -884,6 +1111,7 @@ function StickyEditor({
   const editorFontScale = normalizedEditorPreferences.editorFontScale;
   const editorFontFamily = normalizedEditorPreferences.editorFontFamily;
   const showTableOfContents = normalizedEditorPreferences.showTableOfContents;
+  const keyboardShortcuts = normalizedEditorPreferences.keyboardShortcuts;
   const editorFontOptions = useMemo(
     () => getEditorFontFamilyOptions(installedFontFamilies, editorFontFamily),
     [editorFontFamily, installedFontFamilies],
@@ -897,6 +1125,10 @@ function StickyEditor({
     [notes],
   );
   const visibleSessionNotes = dockedNotes.length > 0 ? dockedNotes : notes;
+  const visibleSessionNoteIds = useMemo(
+    () => visibleSessionNotes.map((sessionNote) => sessionNote.id),
+    [visibleSessionNotes],
+  );
   const noteIndexById = useMemo(
     () => new Map(notes.map((candidate, index) => [candidate.id, index])),
     [notes],
@@ -923,6 +1155,7 @@ function StickyEditor({
   const [preferencesInitialPage, setPreferencesInitialPage] = useState("general");
   const [isStickySettingsOpen, setIsStickySettingsOpen] = useState(false);
   const [isStickyTrashConfirmOpen, setIsStickyTrashConfirmOpen] = useState(false);
+  const [pendingSessionTrashNote, setPendingSessionTrashNote] = useState(null);
   const [sessionTabMenu, setSessionTabMenu] = useState(null);
   const [sessionColorPanelNoteId, setSessionColorPanelNoteId] = useState(null);
   const [isEditorActive, setIsEditorActive] = useState(false);
@@ -931,6 +1164,7 @@ function StickyEditor({
   const [isDraftSessionTitleDirty, setIsDraftSessionTitleDirty] = useState(false);
   const [enteringSessionIds, setEnteringSessionIds] = useState(() => new Set());
   const [removingSessionIds, setRemovingSessionIds] = useState(() => new Set());
+  const [draggingSessionNoteId, setDraggingSessionNoteId] = useState(null);
   const [isPinned, setIsPinned] = useState(Boolean(note.alwaysOnTop));
   const [activeImageBlockId, setActiveImageBlockId] = useState(null);
   const [cropState, setCropState] = useState(null);
@@ -944,6 +1178,12 @@ function StickyEditor({
   const sessionAppearanceTimerRef = useRef(null);
   const exportToastTimerRef = useRef(null);
   const editorFontSizeToastTimerRef = useRef(null);
+  const sessionTabRowsRef = useRef(new Map());
+  const previousSessionTabRectsRef = useRef(null);
+  const dragOriginalSessionOrderRef = useRef(null);
+  const dragPreviewSessionOrderRef = useRef(null);
+  const dragHasReorderedRef = useRef(false);
+  const dragDroppedInsideRef = useRef(false);
   const lastSavedBlocksRef = useRef("");
   const isSidebarCompact = effectiveLayoutMode === "tabs" && !isSidebarOpen;
   const sidebarState = isSidebarCompact ? "compact" : "expanded";
@@ -1003,7 +1243,15 @@ function StickyEditor({
       exportToastTimerRef.current = null;
     }
 
-    setExportToast({ message, tone });
+    const action =
+      typeof options.onAction === "function" && options.actionLabel
+        ? {
+            label: options.actionLabel,
+            onClick: options.onAction,
+          }
+        : null;
+
+    setExportToast({ action, message, tone });
 
     const timeout = options.timeout ?? EXPORT_TOAST_TIMEOUT_MS;
     if (timeout > 0) {
@@ -1043,7 +1291,23 @@ function StickyEditor({
       setIsStickySettingsOpen(false);
       setIsStickyTrashConfirmOpen(false);
     }
+    if (effectiveLayoutMode !== "tabs") {
+      setPendingSessionTrashNote(null);
+    }
   }, [effectiveLayoutMode, note.id]);
+
+  useEffect(() => {
+    if (!pendingSessionTrashNote) {
+      return;
+    }
+
+    const stillVisible = visibleSessionNotes.some(
+      (sessionNote) => sessionNote.id === pendingSessionTrashNote.id,
+    );
+    if (!stillVisible || notes.length <= 1) {
+      setPendingSessionTrashNote(null);
+    }
+  }, [notes.length, pendingSessionTrashNote, visibleSessionNotes]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -1341,11 +1605,19 @@ function StickyEditor({
     [editor],
   );
 
+  const focusEditor = useCallback(() => {
+    setIsEditorActive(true);
+    window.requestAnimationFrame(() => {
+      focusLastEditorBlock(editor);
+    });
+  }, [editor]);
+
   const openPreferencesPage = useCallback((pageId = "general") => {
     setPreferencesInitialPage(normalizePreferencePageId(pageId));
     setIsColorPanelOpen(false);
     setIsStickySettingsOpen(false);
     setIsStickyTrashConfirmOpen(false);
+    setPendingSessionTrashNote(null);
     setSessionTabMenu(null);
     setSessionColorPanelNoteId(null);
     setIsPreferencesWindowOpen(true);
@@ -1363,6 +1635,7 @@ function StickyEditor({
     setIsColorPanelOpen(false);
     setIsPreferencesWindowOpen(false);
     setIsStickyTrashConfirmOpen(false);
+    setPendingSessionTrashNote(null);
     setSessionTabMenu(null);
     setSessionColorPanelNoteId(null);
     setIsStickySettingsOpen(true);
@@ -1375,6 +1648,7 @@ function StickyEditor({
     setIsPreferencesWindowOpen(false);
     setIsStickySettingsOpen(false);
     setIsStickyTrashConfirmOpen(false);
+    setPendingSessionTrashNote(null);
     void onLayoutModeChanged(normalizedLayoutMode === "tabs" ? "sticky" : "tabs");
   }, [normalizedLayoutMode, onLayoutModeChanged]);
 
@@ -1458,11 +1732,10 @@ function StickyEditor({
 
   useEffect(() => {
     const handlePreferencesShortcut = (event) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
-        return;
-      }
-
-      if (event.key !== ",") {
+      if (
+        isShortcutRecorderTarget(event.target) ||
+        !matchesKeyboardShortcut(event, keyboardShortcuts.preferences)
+      ) {
         return;
       }
 
@@ -1474,36 +1747,38 @@ function StickyEditor({
     return () => {
       document.removeEventListener("keydown", handlePreferencesShortcut, true);
     };
-  }, [openPreferences]);
+  }, [keyboardShortcuts.preferences, openPreferences]);
 
   useEffect(() => {
     const handleChromeShortcut = (event) => {
-      const isCommand = event.metaKey || event.ctrlKey;
-      if (!isCommand || event.altKey) {
+      if (isShortcutRecorderTarget(event.target)) {
         return;
       }
 
-      if (event.target instanceof Element && event.target.closest("input, textarea, select")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("input, textarea, select, .preferences-window")
+      ) {
         return;
       }
 
-      const key = event.key.toLowerCase();
-      if (event.shiftKey && key === "m") {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleLayoutMode)) {
         event.preventDefault();
         toggleLayoutMode();
         return;
       }
 
-      if (event.shiftKey && key === "l") {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleThemeMode)) {
         event.preventDefault();
         void onAppThemeModeChanged(appThemeMode === "dark" ? "light" : "dark");
         return;
       }
 
-      if (event.shiftKey && key === "e") {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.exportPdf)) {
         event.preventDefault();
         setIsColorPanelOpen(false);
         setIsStickySettingsOpen(false);
+        setPendingSessionTrashNote(null);
         setSessionTabMenu(null);
         setSessionColorPanelNoteId(null);
         setIsPreferencesWindowOpen(false);
@@ -1511,31 +1786,43 @@ function StickyEditor({
         return;
       }
 
-      if ((key === "+" || key === "=") && !event.altKey) {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.increaseEditorFontSize)) {
         event.preventDefault();
         adjustEditorFontScale(1);
         return;
       }
 
-      if ((key === "-" || key === "_") && !event.altKey) {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.decreaseEditorFontSize)) {
         event.preventDefault();
         adjustEditorFontScale(-1);
         return;
       }
 
-      if (event.shiftKey && key === "d" && note.detached) {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.attachDetachedNote) && note.detached) {
         event.preventDefault();
         void onAttachNote(note.id);
         return;
       }
 
-      if (!event.shiftKey && event.key === "\\") {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleSidebar)) {
         event.preventDefault();
         setIsSidebarOpen((value) => !value);
         return;
       }
 
-      if (!event.shiftKey && (key === "n" || key === "t") && effectiveLayoutMode === "tabs") {
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.focusEditor)) {
+        event.preventDefault();
+        focusEditor();
+        return;
+      }
+
+      if (
+        (
+          matchesKeyboardShortcut(event, keyboardShortcuts.newSession) ||
+          matchesKeyboardShortcut(event, keyboardShortcuts.newNote)
+        ) &&
+        effectiveLayoutMode === "tabs"
+      ) {
         event.preventDefault();
         void onCreateNote();
       }
@@ -1548,6 +1835,7 @@ function StickyEditor({
   }, [
     appThemeMode,
     effectiveLayoutMode,
+    keyboardShortcuts,
     note.detached,
     note.id,
     onAppThemeModeChanged,
@@ -1555,6 +1843,7 @@ function StickyEditor({
     onCreateNote,
     adjustEditorFontScale,
     exportNote,
+    focusEditor,
     toggleLayoutMode,
   ]);
 
@@ -1564,6 +1853,7 @@ function StickyEditor({
       !isPreferencesWindowOpen &&
       !isStickySettingsOpen &&
       !isStickyTrashConfirmOpen &&
+      !pendingSessionTrashNote &&
       !sessionTabMenu &&
       !sessionColorPanelNoteId
     ) {
@@ -1577,6 +1867,7 @@ function StickyEditor({
         setIsPreferencesWindowOpen(false);
         setIsStickySettingsOpen(false);
         setIsStickyTrashConfirmOpen(false);
+        setPendingSessionTrashNote(null);
         setSessionTabMenu(null);
         setSessionColorPanelNoteId(null);
       }
@@ -1591,15 +1882,16 @@ function StickyEditor({
     isPreferencesWindowOpen,
     isStickySettingsOpen,
     isStickyTrashConfirmOpen,
+    pendingSessionTrashNote,
     sessionColorPanelNoteId,
     sessionTabMenu,
   ]);
 
   useEffect(() => {
-    const handleEditorKeyDown = (event) => {
-      if (event.key === "Tab" && !isEditorShortcutTarget(event.target)) {
-        if (!isEditableFormTarget(event.target)) {
-          event.preventDefault();
+    const handleEditorKeyDownCapture = (event) => {
+      if (event.key === "Tab") {
+        if (isEditorShortcutTarget(event.target)) {
+          setIsEditorActive(true);
         }
         return;
       }
@@ -1639,9 +1931,37 @@ function StickyEditor({
       void cutCurrentBlocks(editor, activeImageBlockId, scheduleSave);
     };
 
-    document.addEventListener("keydown", handleEditorKeyDown, true);
+    const handleEditorTabKeyDown = (event) => {
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      if (!isEditorShortcutTarget(event.target)) {
+        if (!isEditableFormTarget(event.target)) {
+          event.preventDefault();
+          if (isEditorActive) {
+            editor.focus();
+          }
+        }
+        return;
+      }
+
+      setIsEditorActive(true);
+      if (!event.defaultPrevented) {
+        event.preventDefault();
+      }
+      window.requestAnimationFrame(() => {
+        if (!isEditorShortcutTarget(document.activeElement)) {
+          editor.focus();
+        }
+      });
+    };
+
+    document.addEventListener("keydown", handleEditorKeyDownCapture, true);
+    document.addEventListener("keydown", handleEditorTabKeyDown);
     return () => {
-      document.removeEventListener("keydown", handleEditorKeyDown, true);
+      document.removeEventListener("keydown", handleEditorKeyDownCapture, true);
+      document.removeEventListener("keydown", handleEditorTabKeyDown);
     };
   }, [activeImageBlockId, editor, isEditorActive, scheduleSave]);
 
@@ -1820,6 +2140,7 @@ function StickyEditor({
 
   const openSessionTabMenu = useCallback((sessionNote, event) => {
     event.preventDefault();
+    setPendingSessionTrashNote(null);
     setSessionColorPanelNoteId(null);
     setIsColorPanelOpen(false);
     setIsStickySettingsOpen(false);
@@ -1834,6 +2155,7 @@ function StickyEditor({
 
   const openSessionColorPanel = useCallback((sessionNoteId) => {
     setSessionTabMenu(null);
+    setPendingSessionTrashNote(null);
     setSessionColorPanelNoteId(sessionNoteId);
     setIsColorPanelOpen(false);
     setIsStickySettingsOpen(false);
@@ -1940,9 +2262,30 @@ function StickyEditor({
     ],
   );
 
+  const requestDeleteSessionNote = useCallback(
+    (sessionNote) => {
+      if (notes.length <= 1 || removingSessionIds.has(sessionNote.id)) {
+        return;
+      }
+
+      setEditingSessionId(null);
+      setDraftSessionTitle("");
+      setIsDraftSessionTitleDirty(false);
+      setIsColorPanelOpen(false);
+      setIsPreferencesWindowOpen(false);
+      setIsStickySettingsOpen(false);
+      setIsStickyTrashConfirmOpen(false);
+      setSessionTabMenu(null);
+      setSessionColorPanelNoteId(null);
+      setPendingSessionTrashNote(sessionNote);
+    },
+    [notes.length, removingSessionIds],
+  );
+
   const deleteSessionNote = useCallback(
     async (sessionNote) => {
       if (notes.length <= 1) {
+        showExportToast("At least one session must remain.", "error");
         return;
       }
 
@@ -1952,6 +2295,7 @@ function StickyEditor({
 
       setEditingSessionId(null);
       setDraftSessionTitle("");
+      setIsDraftSessionTitleDirty(false);
       setRemovingSessionIds((currentIds) => {
         const nextIds = new Set(currentIds);
         nextIds.add(sessionNote.id);
@@ -1961,10 +2305,25 @@ function StickyEditor({
       try {
         await delay(SESSION_TAB_EXIT_MS);
         await saveNow();
-        await onDeleteNote(
-          sessionNote.id,
-          sessionNote.id === note.id ? getCurrentNoteSnapshot() : sessionNote,
+        const deletedSnapshot =
+          sessionNote.id === note.id ? getCurrentNoteSnapshot() : sessionNote;
+        const deletedTitle = getNoteDisplayTitle(
+          deletedSnapshot,
+          sessionNote.id === note.id ? editor.document : null,
         );
+        const result = await onDeleteNote(
+          sessionNote.id,
+          deletedSnapshot,
+        );
+        if (result?.deleted === false) {
+          showExportToast("Could not move session to Trash.", "error");
+          return;
+        }
+
+        onSessionMovedToTrash?.({
+          noteId: sessionNote.id,
+          title: deletedTitle,
+        });
       } finally {
         setRemovingSessionIds((currentIds) => {
           const nextIds = new Set(currentIds);
@@ -1973,8 +2332,28 @@ function StickyEditor({
         });
       }
     },
-    [getCurrentNoteSnapshot, note.id, notes.length, onDeleteNote, removingSessionIds, saveNow],
+    [
+      editor.document,
+      getCurrentNoteSnapshot,
+      note.id,
+      notes.length,
+      onDeleteNote,
+      removingSessionIds,
+      saveNow,
+      showExportToast,
+      onSessionMovedToTrash,
+    ],
   );
+
+  const confirmDeleteSessionNote = useCallback(async () => {
+    const sessionNote = pendingSessionTrashNote;
+    if (!sessionNote) {
+      return;
+    }
+
+    setPendingSessionTrashNote(null);
+    await deleteSessionNote(sessionNote);
+  }, [deleteSessionNote, pendingSessionTrashNote]);
 
   const getSessionTabRowClassName = useCallback(
     (sessionNote) =>
@@ -1983,11 +2362,86 @@ function StickyEditor({
         sessionNote.id === note.id ? "active" : "",
         enteringSessionIds.has(sessionNote.id) ? "is-entering" : "",
         removingSessionIds.has(sessionNote.id) ? "is-leaving" : "",
+        draggingSessionNoteId === sessionNote.id ? "is-dragging" : "",
       ]
         .filter(Boolean)
         .join(" "),
-    [enteringSessionIds, note.id, removingSessionIds],
+    [draggingSessionNoteId, enteringSessionIds, note.id, removingSessionIds],
   );
+
+  const setSessionTabRowRef = useCallback((noteId, element) => {
+    if (element) {
+      sessionTabRowsRef.current.set(noteId, element);
+      return;
+    }
+
+    sessionTabRowsRef.current.delete(noteId);
+  }, []);
+
+  const captureSessionTabRects = useCallback(() => {
+    previousSessionTabRectsRef.current = getSessionTabRects(sessionTabRowsRef.current);
+  }, []);
+
+  const reorderSessionNotes = useCallback(
+    async (orderedNoteIds, options = {}) => {
+      if (effectiveLayoutMode !== "tabs") {
+        return null;
+      }
+
+      const normalizedOrderedNoteIds = normalizeOrderedNoteIds(orderedNoteIds);
+      if (normalizedOrderedNoteIds.length === 0) {
+        return null;
+      }
+
+      captureSessionTabRects();
+      return await onReorderNotes?.(normalizedOrderedNoteIds, options);
+    },
+    [captureSessionTabRects, effectiveLayoutMode, onReorderNotes],
+  );
+
+  const moveCurrentSessionNote = useCallback(
+    async (direction) => {
+      if (effectiveLayoutMode !== "tabs" || visibleSessionNoteIds.length <= 1) {
+        return;
+      }
+
+      const currentIndex = visibleSessionNoteIds.indexOf(note.id);
+      if (currentIndex < 0) {
+        return;
+      }
+
+      const nextIndex = clamp(
+        currentIndex + direction,
+        0,
+        visibleSessionNoteIds.length - 1,
+        currentIndex,
+      );
+      if (nextIndex === currentIndex) {
+        return;
+      }
+
+      await reorderSessionNotes(
+        moveArrayItem(visibleSessionNoteIds, currentIndex, nextIndex),
+        { persist: true },
+      );
+    },
+    [
+      effectiveLayoutMode,
+      note.id,
+      reorderSessionNotes,
+      visibleSessionNoteIds,
+    ],
+  );
+
+  useLayoutEffect(() => {
+    const previousRects = previousSessionTabRectsRef.current;
+    if (!previousRects) {
+      return;
+    }
+
+    previousSessionTabRectsRef.current = null;
+    animateSessionTabReorder(sessionTabRowsRef.current, previousRects);
+  }, [visibleSessionNoteIds]);
 
   const selectRelativeSessionNote = useCallback(
     async (direction) => {
@@ -2015,21 +2469,6 @@ function StickyEditor({
     [effectiveLayoutMode, note.id, selectSidebarNote, visibleSessionNotes],
   );
 
-  const deleteCurrentSessionTab = useCallback(async () => {
-    if (effectiveLayoutMode !== "tabs" || visibleSessionNotes.length <= 1) {
-      return;
-    }
-
-    const currentSessionNote = visibleSessionNotes.find(
-      (sessionNote) => sessionNote.id === note.id,
-    );
-    if (!currentSessionNote) {
-      return;
-    }
-
-    await deleteSessionNote(currentSessionNote);
-  }, [deleteSessionNote, effectiveLayoutMode, note.id, visibleSessionNotes]);
-
   const requestMoveCurrentStickyNoteToTrash = useCallback(() => {
     if (notes.length <= 1) {
       showExportToast("At least one session must remain.", "error");
@@ -2039,6 +2478,7 @@ function StickyEditor({
     setIsColorPanelOpen(false);
     setIsPreferencesWindowOpen(false);
     setIsStickySettingsOpen(false);
+    setPendingSessionTrashNote(null);
     setSessionTabMenu(null);
     setSessionColorPanelNoteId(null);
     setIsStickyTrashConfirmOpen(true);
@@ -2054,6 +2494,7 @@ function StickyEditor({
     setIsColorPanelOpen(false);
     setIsPreferencesWindowOpen(false);
     setIsStickySettingsOpen(false);
+    setPendingSessionTrashNote(null);
     setSessionTabMenu(null);
     setSessionColorPanelNoteId(null);
     await saveNow();
@@ -2069,11 +2510,18 @@ function StickyEditor({
 
   useEffect(() => {
     const handleSessionShortcut = (event) => {
+      if (isShortcutRecorderTarget(event.target)) {
+        return;
+      }
+
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
         return;
       }
 
-      if (event.target instanceof Element && event.target.closest("input, textarea, select")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("input, textarea, select, .preferences-window")
+      ) {
         return;
       }
 
@@ -2099,7 +2547,7 @@ function StickyEditor({
 
   useEffect(() => {
     const handleTabModeShortcut = (event) => {
-      if (!(event.metaKey || event.ctrlKey)) {
+      if (isShortcutRecorderTarget(event.target)) {
         return;
       }
 
@@ -2107,33 +2555,36 @@ function StickyEditor({
         return;
       }
 
-      const key = event.key.toLowerCase();
-      if (!event.altKey && !event.shiftKey && key === "w") {
-        if (effectiveLayoutMode !== "tabs" || visibleSessionNotes.length <= 1) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        void deleteCurrentSessionTab();
-        return;
-      }
-
-      if (!event.altKey || event.shiftKey) {
-        return;
-      }
-
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-        return;
-      }
-
       if (effectiveLayoutMode !== "tabs" || visibleSessionNotes.length <= 1) {
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
-      void selectRelativeSessionNote(event.key === "ArrowLeft" ? -1 : 1);
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.moveTabLeft)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void moveCurrentSessionNote(-1);
+        return;
+      }
+
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.moveTabRight)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void moveCurrentSessionNote(1);
+        return;
+      }
+
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.previousTab)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void selectRelativeSessionNote(-1);
+        return;
+      }
+
+      if (matchesKeyboardShortcut(event, keyboardShortcuts.nextTab)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void selectRelativeSessionNote(1);
+      }
     };
 
     document.addEventListener("keydown", handleTabModeShortcut, true);
@@ -2141,8 +2592,12 @@ function StickyEditor({
       document.removeEventListener("keydown", handleTabModeShortcut, true);
     };
   }, [
-    deleteCurrentSessionTab,
     effectiveLayoutMode,
+    keyboardShortcuts.moveTabLeft,
+    keyboardShortcuts.moveTabRight,
+    keyboardShortcuts.nextTab,
+    keyboardShortcuts.previousTab,
+    moveCurrentSessionNote,
     selectRelativeSessionNote,
     visibleSessionNotes.length,
   ]);
@@ -2172,8 +2627,153 @@ function StickyEditor({
     [normalizedLayoutMode, onDetachNote, saveNow],
   );
 
+  const startSessionTabDrag = useCallback(
+    (sessionNote, event) => {
+      if (normalizedLayoutMode !== "tabs" || sessionNote.detached) {
+        return;
+      }
+
+      dragOriginalSessionOrderRef.current = visibleSessionNoteIds;
+      dragPreviewSessionOrderRef.current = visibleSessionNoteIds;
+      dragHasReorderedRef.current = false;
+      dragDroppedInsideRef.current = false;
+      setDraggingSessionNoteId(sessionNote.id);
+      event.dataTransfer?.setData("application/x-notepane-note", sessionNote.id);
+      event.dataTransfer?.setData("application/x-notepane-session-reorder", sessionNote.id);
+      event.dataTransfer.effectAllowed = "move";
+    },
+    [normalizedLayoutMode, visibleSessionNoteIds],
+  );
+
+  const previewSessionTabReorder = useCallback(
+    (sourceNoteId, targetNoteId, insertionSide = "before") => {
+      if (!sourceNoteId || !targetNoteId || sourceNoteId === targetNoteId) {
+        return;
+      }
+
+      const nextOrder = getReorderedNoteIdsForDrop(
+        visibleSessionNoteIds,
+        sourceNoteId,
+        targetNoteId,
+        insertionSide,
+      );
+      if (arraysEqual(nextOrder, visibleSessionNoteIds)) {
+        return;
+      }
+
+      dragHasReorderedRef.current = true;
+      dragPreviewSessionOrderRef.current = nextOrder;
+      void reorderSessionNotes(nextOrder, { persist: false });
+    },
+    [reorderSessionNotes, visibleSessionNoteIds],
+  );
+
+  const handleSessionTabDragOver = useCallback(
+    (sessionNote, event) => {
+      const sourceNoteId = draggingSessionNoteId ??
+        event.dataTransfer?.getData("application/x-notepane-session-reorder");
+      if (!sourceNoteId) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const rect = event.currentTarget.getBoundingClientRect();
+      previewSessionTabReorder(
+        sourceNoteId,
+        sessionNote.id,
+        event.clientY > rect.top + rect.height / 2 ? "after" : "before",
+      );
+    },
+    [draggingSessionNoteId, previewSessionTabReorder],
+  );
+
+  const handleSessionTabsDragOver = useCallback(
+    (event) => {
+      const sourceNoteId = draggingSessionNoteId ??
+        event.dataTransfer?.getData("application/x-notepane-session-reorder");
+      if (!sourceNoteId) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const firstNoteId = visibleSessionNoteIds[0];
+      const lastNoteId = visibleSessionNoteIds.at(-1);
+      const firstRow = firstNoteId ? sessionTabRowsRef.current.get(firstNoteId) : null;
+      const lastRow = lastNoteId ? sessionTabRowsRef.current.get(lastNoteId) : null;
+
+      if (firstNoteId && firstRow && event.clientY < firstRow.getBoundingClientRect().top) {
+        previewSessionTabReorder(sourceNoteId, firstNoteId, "before");
+        return;
+      }
+
+      if (lastNoteId && lastRow && event.clientY > lastRow.getBoundingClientRect().bottom) {
+        previewSessionTabReorder(sourceNoteId, lastNoteId, "after");
+      }
+    },
+    [draggingSessionNoteId, previewSessionTabReorder, visibleSessionNoteIds],
+  );
+
+  const dropSessionTab = useCallback(
+    async (event) => {
+      const sourceNoteId = draggingSessionNoteId ??
+        event.dataTransfer?.getData("application/x-notepane-session-reorder");
+      if (!sourceNoteId) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      dragDroppedInsideRef.current = true;
+      if (dragHasReorderedRef.current) {
+        await reorderSessionNotes(dragPreviewSessionOrderRef.current ?? visibleSessionNoteIds, {
+          persist: true,
+        });
+      }
+    },
+    [draggingSessionNoteId, reorderSessionNotes, visibleSessionNoteIds],
+  );
+
+  const endSessionTabDrag = useCallback(
+    async (sessionNote, event) => {
+      const droppedInside = dragDroppedInsideRef.current;
+      const originalOrder = dragOriginalSessionOrderRef.current;
+      const previewOrder = dragPreviewSessionOrderRef.current;
+      const hasReordered = dragHasReorderedRef.current;
+      const endedInsideSessionTabs = isPointInsideElement(
+        event,
+        document.querySelector(".session-tabs"),
+      );
+      dragOriginalSessionOrderRef.current = null;
+      dragPreviewSessionOrderRef.current = null;
+      dragHasReorderedRef.current = false;
+      dragDroppedInsideRef.current = false;
+      setDraggingSessionNoteId(null);
+
+      if (!droppedInside && hasReordered) {
+        if (endedInsideSessionTabs && previewOrder) {
+          await reorderSessionNotes(previewOrder, { persist: true });
+        } else if (originalOrder) {
+          await reorderSessionNotes(originalOrder, { persist: false });
+        }
+      }
+
+      if (!droppedInside && !endedInsideSessionTabs) {
+        await detachSessionNote(sessionNote, event);
+      }
+    },
+    [detachSessionNote, reorderSessionNotes],
+  );
+
   const attachDraggedNote = useCallback(
     async (event) => {
+      if (event.dataTransfer?.types.includes("application/x-notepane-session-reorder")) {
+        return;
+      }
+
       const noteId = event.dataTransfer?.getData("application/x-notepane-note");
       if (!noteId) {
         return;
@@ -2268,12 +2868,17 @@ function StickyEditor({
               <div className="sticky-header-action-list">
                 <StickyPinButton
                   isPinned={isPinned}
+                  shortcut={keyboardShortcuts.toggleAlwaysOnTop}
                   onClick={() => void togglePin()}
                 />
-                <ExportPdfButton onClick={() => void exportNote()} />
+                <ExportPdfButton
+                  shortcut={keyboardShortcuts.exportPdf}
+                  onClick={() => void exportNote()}
+                />
                 <LayoutModeSwitch
                   mode={normalizedLayoutMode}
                   compact
+                  shortcut={keyboardShortcuts.toggleLayoutMode}
                   onChange={toggleLayoutMode}
                 />
                 <StickySettingsButton
@@ -2299,7 +2904,7 @@ function StickyEditor({
               type="button"
               className="dock-note-button has-tooltip"
               aria-label="Dock note into tabs"
-              data-tooltip={`Dock to tabs · ${getShortcutLabel("⇧D")}`}
+              data-tooltip={`Dock to tabs · ${getShortcutLabel(keyboardShortcuts.attachDetachedNote)}`}
               onMouseDown={preventFocusLoss}
               onClick={() => void onAttachNote(note.id)}
             >
@@ -2328,7 +2933,7 @@ function StickyEditor({
                 type="button"
                 className="sidebar-toggle has-tooltip"
                 aria-label={isSidebarCompact ? "Show sidebar" : "Hide sidebar"}
-                data-tooltip={`${isSidebarCompact ? "Show sidebar" : "Hide sidebar"} · ${getShortcutLabel("\\")}`}
+                data-tooltip={`${isSidebarCompact ? "Show sidebar" : "Hide sidebar"} · ${getShortcutLabel(keyboardShortcuts.toggleSidebar)}`}
                 onMouseDown={preventFocusLoss}
                 onClick={() => {
                   if (isSidebarCompact) {
@@ -2342,12 +2947,20 @@ function StickyEditor({
               </button>
             </div>
             <div className="session-sidebar-content" data-testid="session-sidebar-scroll">
-              <div className="session-tabs" role="tablist" aria-label="Note sessions">
+              <div
+                className="session-tabs"
+                role="tablist"
+                aria-label="Note sessions"
+                onDragOver={handleSessionTabsDragOver}
+                onDrop={(event) => void dropSessionTab(event)}
+              >
                 {visibleSessionNotes.map((sessionNote, index) =>
                   editingSessionId === sessionNote.id ? (
                     <div
                       key={sessionNote.id}
+                      ref={(element) => setSessionTabRowRef(sessionNote.id, element)}
                       className={getSessionTabRowClassName(sessionNote)}
+                      data-note-id={sessionNote.id}
                       style={getSessionTabStyle(
                         sessionNote.theme,
                         appThemeMode,
@@ -2387,21 +3000,25 @@ function StickyEditor({
                   ) : (
                     <div
                       key={sessionNote.id}
+                      ref={(element) => setSessionTabRowRef(sessionNote.id, element)}
                       className={getSessionTabRowClassName(sessionNote)}
+                      data-note-id={sessionNote.id}
                       style={getSessionTabStyle(
                         sessionNote.theme,
                         appThemeMode,
                         noteIndexById.get(sessionNote.id) ?? index,
                       )}
                       draggable={normalizedLayoutMode === "tabs"}
+                      aria-grabbed={
+                        draggingSessionNoteId === sessionNote.id ? "true" : undefined
+                      }
                       onContextMenu={(event) =>
                         openSessionTabMenu(sessionNote, event)
                       }
-                      onDragStart={(event) => {
-                        event.dataTransfer?.setData("application/x-notepane-note", sessionNote.id);
-                        event.dataTransfer.effectAllowed = "move";
-                      }}
-                      onDragEnd={(event) => void detachSessionNote(sessionNote, event)}
+                      onDragStart={(event) => startSessionTabDrag(sessionNote, event)}
+                      onDragOver={(event) => handleSessionTabDragOver(sessionNote, event)}
+                      onDrop={(event) => void dropSessionTab(event)}
+                      onDragEnd={(event) => void endSessionTabDrag(sessionNote, event)}
                     >
                       {isSidebarCompact ? (
                         <button
@@ -2410,7 +3027,6 @@ function StickyEditor({
                           aria-selected={sessionNote.id === note.id}
                           className="session-tab-button has-tooltip"
                           data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
-                          onMouseDown={preventFocusLoss}
                           onClick={() => void selectSidebarNote(sessionNote.id)}
                           onDoubleClick={(event) => {
                             event.preventDefault();
@@ -2431,8 +3047,8 @@ function StickyEditor({
                             disabled={notes.length <= 1}
                             data-tooltip={
                               sessionNote.id === note.id
-                                ? `Close current tab · ${getShortcutLabel("W")}`
-                                : "Delete session"
+                                ? "Move current session to Trash"
+                                : "Move session to Trash"
                             }
                             onMouseDown={(event) => {
                               preventFocusLoss(event);
@@ -2440,7 +3056,7 @@ function StickyEditor({
                             }}
                             onClick={(event) => {
                               event.stopPropagation();
-                              void deleteSessionNote(sessionNote);
+                              requestDeleteSessionNote(sessionNote);
                             }}
                           >
                             <span className="session-index-label">{index + 1}</span>
@@ -2458,7 +3074,6 @@ function StickyEditor({
                             aria-selected={sessionNote.id === note.id}
                             className="session-tab-button has-tooltip"
                             data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
-                            onMouseDown={preventFocusLoss}
                             onClick={() => void selectSidebarNote(sessionNote.id)}
                             onDoubleClick={(event) => {
                               event.preventDefault();
@@ -2489,7 +3104,7 @@ function StickyEditor({
                 type="button"
                 className="session-add-button has-tooltip"
                 aria-label="New session"
-                data-tooltip={`New session · ${getShortcutLabel("T")}`}
+                data-tooltip={`New session · ${getShortcutLabel(keyboardShortcuts.newSession)}`}
                 onMouseDown={preventFocusLoss}
                 onClick={() => void onCreateNote()}
               >
@@ -2508,12 +3123,19 @@ function StickyEditor({
               aria-label="Session sidebar controls"
             >
               <div className="session-sidebar-footer-row">
-                <ExportPdfButton onClick={() => void exportNote()} />
-                <PreferencesButton onClick={openPreferences} />
+                <ExportPdfButton
+                  shortcut={keyboardShortcuts.exportPdf}
+                  onClick={() => void exportNote()}
+                />
+                <PreferencesButton
+                  shortcut={keyboardShortcuts.preferences}
+                  onClick={openPreferences}
+                />
                 <TrashButton onClick={openTrashPreferences} />
                 <LayoutModeSwitch
                   mode={normalizedLayoutMode}
                   compact={isSidebarCompact}
+                  shortcut={keyboardShortcuts.toggleLayoutMode}
                   onChange={toggleLayoutMode}
                 />
               </div>
@@ -2569,6 +3191,9 @@ function StickyEditor({
           />
         </section>
       </div>
+      {layoutTransition && (
+        <LayoutTransitionOverlay transition={layoutTransition} />
+      )}
       {sessionTabMenu && sessionTabMenuNote && (
         <SessionTabContextMenu
           x={sessionTabMenu.x}
@@ -2605,6 +3230,13 @@ function StickyEditor({
           onClose={() => setSessionColorPanelNoteId(null)}
         />
       )}
+      {pendingSessionTrashNote && (
+        <SessionTrashConfirmDialog
+          noteTitle={getSessionDisplayTitle(pendingSessionTrashNote)}
+          onCancel={() => setPendingSessionTrashNote(null)}
+          onConfirm={() => void confirmDeleteSessionNote()}
+        />
+      )}
       {isStickySettingsOpen && (
         <StickySettingsWindow
           noteTitle={title}
@@ -2626,6 +3258,7 @@ function StickyEditor({
           initialPage={preferencesInitialPage}
           appThemeMode={appThemeMode}
           editorPreferences={editorPreferences}
+          keyboardShortcuts={keyboardShortcuts}
           fontOptions={editorFontOptions}
           trashedNotes={trashedNotes}
           onAppThemeModeChange={onAppThemeModeChanged}
@@ -2645,15 +3278,7 @@ function StickyEditor({
           </button>
         </div>
       )}
-      {exportToast && (
-        <div
-          className={`sticky-toast sticky-toast-${exportToast.tone}`}
-          role="status"
-          aria-live="polite"
-        >
-          {exportToast.message}
-        </div>
-      )}
+      {exportToast && <StickyToast toast={exportToast} />}
       <AdaptiveTooltipPortal />
       {cropState && (
         <CropDialog
@@ -2663,6 +3288,58 @@ function StickyEditor({
         />
       )}
     </main>
+  );
+}
+
+function StickyToast({ toast }) {
+  return (
+    <div
+      className={`sticky-toast sticky-toast-${toast.tone}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="sticky-toast-message">{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          className="sticky-toast-action"
+          onMouseDown={preventFocusLoss}
+          onClick={toast.action.onClick}
+        >
+          {toast.action.label}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function LayoutTransitionOverlay({ transition }) {
+  const targetMode = normalizeLayoutMode(transition?.targetMode);
+  const noteCount = Number.isFinite(transition?.noteCount)
+    ? Math.max(0, transition.noteCount)
+    : 0;
+  const isStickyTarget = targetMode === "sticky";
+  const title = isStickyTarget ? "Opening sticky windows" : "Switching to tabs";
+  const detail = isStickyTarget
+    ? `Preparing ${noteCount || "your"} sticky ${noteCount === 1 ? "window" : "windows"}...`
+    : "Collecting notes into tabs...";
+
+  return (
+    <div
+      className="layout-transition-overlay"
+      data-testid="layout-transition-overlay"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="layout-transition-panel">
+        <span className="layout-transition-spinner" aria-hidden="true" />
+        <span className="layout-transition-copy">
+          <strong>{title}</strong>
+          <span>{detail}</span>
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -3024,34 +3701,144 @@ function EditorPreferencesSection({
   );
 }
 
-const PREFERENCE_SHORTCUT_ROWS = [
-  ["New session", "T"],
-  ["Close current tab", "W"],
-  ["Previous tab", "⌥←"],
-  ["Next tab", "⌥→"],
-  ["Toggle tabs / sticky", "⇧M"],
-  ["Toggle light / dark", "⇧L"],
-  ["Export", "⇧E"],
-  ["Preferences", ","],
-  ["Editor font up", "+"],
-  ["Editor font down", "-"],
+const PREFERENCE_SHORTCUT_COMMANDS = [
+  { id: "newSession", label: "New session" },
+  { id: "newNote", label: "New note" },
+  { id: "closeWindow", label: "Close window" },
+  { id: "focusEditor", label: "Focus editor" },
+  { id: "previousTab", label: "Previous tab" },
+  { id: "nextTab", label: "Next tab" },
+  { id: "moveTabLeft", label: "Move tab left" },
+  { id: "moveTabRight", label: "Move tab right" },
+  { id: "toggleSidebar", label: "Toggle sidebar" },
+  { id: "toggleLayoutMode", label: "Toggle tabs / sticky" },
+  { id: "toggleThemeMode", label: "Toggle light / dark" },
+  { id: "exportPdf", label: "Export PDF" },
+  { id: "preferences", label: "Preferences" },
+  { id: "increaseEditorFontSize", label: "Editor font up" },
+  { id: "decreaseEditorFontSize", label: "Editor font down" },
+  { id: "attachDetachedNote", label: "Dock detached note" },
+  { id: "toggleAlwaysOnTop", label: "Toggle always on top" },
 ];
 
-function KeyboardShortcutsSection() {
+function KeyboardShortcutsSection({
+  keyboardShortcuts,
+  onKeyboardShortcutsChange,
+}) {
+  const normalizedShortcuts = normalizeKeyboardShortcuts(keyboardShortcuts);
+  const [recordingCommandId, setRecordingCommandId] = useState(null);
+  const [shortcutError, setShortcutError] = useState("");
+
+  const updateShortcut = useCallback(
+    (commandId, nextShortcut) => {
+      onKeyboardShortcutsChange?.({
+        ...normalizedShortcuts,
+        [commandId]: nextShortcut,
+      });
+    },
+    [normalizedShortcuts, onKeyboardShortcutsChange],
+  );
+
+  const resetShortcut = useCallback(
+    (commandId) => {
+      setShortcutError("");
+      setRecordingCommandId(null);
+      updateShortcut(commandId, DEFAULT_KEYBOARD_SHORTCUTS[commandId]);
+    },
+    [updateShortcut],
+  );
+
+  const recordShortcut = useCallback(
+    (command, event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setRecordingCommandId(null);
+        setShortcutError("");
+        return;
+      }
+
+      const capturedShortcut = keyboardShortcutFromEvent(event);
+      if (!capturedShortcut) {
+        setShortcutError("Use Command/Ctrl with a key.");
+        return;
+      }
+
+      if (isReservedKeyboardShortcut(capturedShortcut)) {
+        setShortcutError("Reserved for tab selection.");
+        return;
+      }
+
+      const conflictCommand = PREFERENCE_SHORTCUT_COMMANDS.find(
+        (candidate) =>
+          candidate.id !== command.id &&
+          normalizedShortcuts[candidate.id] === capturedShortcut,
+      );
+      if (conflictCommand) {
+        setShortcutError(`Already used by ${conflictCommand.label}.`);
+        return;
+      }
+
+      updateShortcut(command.id, capturedShortcut);
+      setRecordingCommandId(null);
+      setShortcutError("");
+    },
+    [normalizedShortcuts, updateShortcut],
+  );
+
   return (
     <section className="preferences-section preferences-shortcuts-section">
       <div className="preferences-section-title">Keyboard shortcuts</div>
-      <div className="preferences-section-description">
-        Current command map. The UI is structured so shortcut remapping can be added here cleanly.
-      </div>
       <div className="shortcut-list" role="list" aria-label="Keyboard shortcuts">
-        {PREFERENCE_SHORTCUT_ROWS.map(([label, shortcut]) => (
-          <div className="shortcut-row" role="listitem" key={label}>
-            <span>{label}</span>
-            <kbd>{getShortcutLabel(shortcut)}</kbd>
-          </div>
-        ))}
+        {PREFERENCE_SHORTCUT_COMMANDS.map((command) => {
+          const shortcut = normalizedShortcuts[command.id];
+          const isRecording = recordingCommandId === command.id;
+          const isDefaultShortcut = shortcut === DEFAULT_KEYBOARD_SHORTCUTS[command.id];
+
+          return (
+            <div
+              className="shortcut-row"
+              role="listitem"
+              key={command.id}
+              data-recording={isRecording ? "true" : "false"}
+            >
+              <span>{command.label}</span>
+              <button
+                type="button"
+                className="shortcut-recorder-button"
+                aria-label={`Shortcut for ${command.label}`}
+                aria-pressed={isRecording ? "true" : "false"}
+                onClick={() => {
+                  setRecordingCommandId(command.id);
+                  setShortcutError("");
+                }}
+                onKeyDown={(event) => {
+                  if (isRecording) {
+                    recordShortcut(command, event);
+                  }
+                }}
+              >
+                {isRecording ? "Recording" : getShortcutLabel(shortcut)}
+              </button>
+              <button
+                type="button"
+                className="shortcut-reset-button"
+                aria-label={`Reset ${command.label} shortcut`}
+                disabled={isDefaultShortcut}
+                onClick={() => resetShortcut(command.id)}
+              >
+                Reset
+              </button>
+            </div>
+          );
+        })}
       </div>
+      {shortcutError && (
+        <div className="shortcut-error" role="status">
+          {shortcutError}
+        </div>
+      )}
     </section>
   );
 }
@@ -3061,23 +3848,140 @@ function TrashPreferencesSection({
   onRestoreNote,
   onPurgeNote,
 }) {
-  const [pendingPurgeNote, setPendingPurgeNote] = useState(null);
+  const [selectedTrashNoteIds, setSelectedTrashNoteIds] = useState(() => new Set());
+  const [pendingPurgeNoteIds, setPendingPurgeNoteIds] = useState([]);
+  const [previewTrashNoteId, setPreviewTrashNoteId] = useState(null);
   const visibleTrashedNotes = Array.isArray(trashedNotes) ? trashedNotes : [];
+  const visibleTrashNoteIds = useMemo(
+    () => visibleTrashedNotes.map((trashNote) => trashNote.id).filter(Boolean),
+    [visibleTrashedNotes],
+  );
+  const selectedTrashNotes = useMemo(
+    () => visibleTrashedNotes.filter((trashNote) => selectedTrashNoteIds.has(trashNote.id)),
+    [selectedTrashNoteIds, visibleTrashedNotes],
+  );
+  const pendingPurgeNotes = useMemo(() => {
+    const pendingIds = new Set(pendingPurgeNoteIds);
+    return visibleTrashedNotes.filter((trashNote) => pendingIds.has(trashNote.id));
+  }, [pendingPurgeNoteIds, visibleTrashedNotes]);
+  const selectedCount = selectedTrashNotes.length;
+  const selectedTrashNoteLabel = `${selectedCount} selected ${
+    selectedCount === 1 ? "note" : "notes"
+  }`;
+  const allTrashNotesSelected =
+    visibleTrashNoteIds.length > 0 && selectedCount === visibleTrashNoteIds.length;
+  const someTrashNotesSelected = selectedCount > 0 && !allTrashNotesSelected;
 
   useEffect(() => {
-    if (
-      pendingPurgeNote &&
-      !visibleTrashedNotes.some((note) => note.id === pendingPurgeNote.id)
-    ) {
-      setPendingPurgeNote(null);
+    const visibleIds = new Set(visibleTrashNoteIds);
+    if (previewTrashNoteId && !visibleIds.has(previewTrashNoteId)) {
+      setPreviewTrashNoteId(null);
     }
-  }, [pendingPurgeNote, visibleTrashedNotes]);
+    setSelectedTrashNoteIds((currentIds) => {
+      const nextIds = new Set(
+        [...currentIds].filter((noteId) => visibleIds.has(noteId)),
+      );
+      return nextIds.size === currentIds.size ? currentIds : nextIds;
+    });
+    setPendingPurgeNoteIds((currentIds) => {
+      const nextIds = currentIds.filter((noteId) => visibleIds.has(noteId));
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [previewTrashNoteId, visibleTrashNoteIds]);
 
-  const confirmPurgeNote = pendingPurgeNote
-    ? {
-        ...pendingPurgeNote,
-        title: getNoteDisplayTitle(pendingPurgeNote),
+  const toggleTrashNoteSelection = useCallback((noteId) => {
+    setSelectedTrashNoteIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(noteId)) {
+        nextIds.delete(noteId);
+      } else {
+        nextIds.add(noteId);
       }
+      return nextIds;
+    });
+  }, []);
+
+  const handleTrashRowKeyDown = useCallback(
+    (event, noteId) => {
+      if (event.target !== event.currentTarget) {
+        return;
+      }
+
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+
+      event.preventDefault();
+      toggleTrashNoteSelection(noteId);
+    },
+    [toggleTrashNoteSelection],
+  );
+
+  const setAllTrashNotesSelected = useCallback(
+    (checked) => {
+      setSelectedTrashNoteIds(checked ? new Set(visibleTrashNoteIds) : new Set());
+    },
+    [visibleTrashNoteIds],
+  );
+
+  const restoreSelectedTrashNotes = useCallback(async () => {
+    const noteIds = selectedTrashNotes.map((trashNote) => trashNote.id);
+    if (noteIds.length === 0) {
+      return;
+    }
+
+    setSelectedTrashNoteIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      for (const noteId of noteIds) {
+        nextIds.delete(noteId);
+      }
+      return nextIds;
+    });
+    for (const noteId of noteIds) {
+      await onRestoreNote?.(noteId);
+    }
+  }, [onRestoreNote, selectedTrashNotes]);
+
+  const confirmSelectedTrashPurge = useCallback(() => {
+    if (selectedTrashNotes.length === 0) {
+      return;
+    }
+
+    setPendingPurgeNoteIds(selectedTrashNotes.map((trashNote) => trashNote.id));
+  }, [selectedTrashNotes]);
+
+  const purgePendingTrashNotes = useCallback(async () => {
+    const noteIds = pendingPurgeNotes.map((trashNote) => trashNote.id);
+    if (noteIds.length === 0) {
+      setPendingPurgeNoteIds([]);
+      return;
+    }
+
+    setPendingPurgeNoteIds([]);
+    setSelectedTrashNoteIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      for (const noteId of noteIds) {
+        nextIds.delete(noteId);
+      }
+      return nextIds;
+    });
+    for (const noteId of noteIds) {
+      await onPurgeNote?.(noteId);
+    }
+  }, [onPurgeNote, pendingPurgeNotes]);
+
+  const confirmPurgeNote = pendingPurgeNotes.length === 1
+    ? {
+        ...pendingPurgeNotes[0],
+        title: getNoteDisplayTitle(pendingPurgeNotes[0]),
+      }
+    : null;
+  const confirmPurgeCount = pendingPurgeNotes.length;
+  const confirmPurgeSummary = confirmPurgeNote
+    ? confirmPurgeNote.title
+    : `${confirmPurgeCount} selected notes`;
+  const previewTrashNote = previewTrashNoteId
+    ? visibleTrashedNotes.find((trashNote) => trashNote.id === previewTrashNoteId) ?? null
     : null;
 
   return (
@@ -3091,51 +3995,111 @@ function TrashPreferencesSection({
           Trash is empty.
         </div>
       ) : (
-        <div className="trash-note-list" role="list" aria-label="Trash notes">
-          {visibleTrashedNotes.map((trashNote) => {
-            const title = getNoteDisplayTitle(trashNote);
-            return (
-              <div className="trash-note-row" role="listitem" key={trashNote.id}>
-                <div className="trash-note-meta">
-                  <div className="trash-note-title">{title}</div>
-                  <div className="trash-note-date">
-                    {formatTrashTimestamp(trashNote.trashedAt)}
+        <>
+          <div className="trash-selection-toolbar" aria-label="Trash selection actions">
+            <TrashSelectionCheckbox
+              ariaLabel="Select all trash notes"
+              checked={allTrashNotesSelected}
+              className="trash-select-all-control"
+              indeterminate={someTrashNotesSelected}
+              onChange={(event) => setAllTrashNotesSelected(event.target.checked)}
+            >
+              Select all
+            </TrashSelectionCheckbox>
+            <div className="trash-selection-status" aria-live="polite">
+              {selectedCount} selected
+            </div>
+            <div className="trash-bulk-actions">
+              <button
+                type="button"
+                className="trash-action-button"
+                aria-label={
+                  selectedCount > 0
+                    ? `Restore ${selectedTrashNoteLabel}`
+                    : "Restore selected notes"
+                }
+                disabled={selectedCount === 0}
+                onMouseDown={preventFocusLoss}
+                onClick={() => void restoreSelectedTrashNotes()}
+              >
+                <RestoreNoteIcon />
+                <span>Restore selected</span>
+              </button>
+              <button
+                type="button"
+                className="trash-action-button trash-action-danger"
+                aria-label={
+                  selectedCount > 0
+                    ? `Delete permanently ${selectedTrashNoteLabel}`
+                    : "Delete selected notes permanently"
+                }
+                disabled={selectedCount === 0}
+                onMouseDown={preventFocusLoss}
+                onClick={confirmSelectedTrashPurge}
+              >
+                <PermanentDeleteIcon />
+                <span>Delete selected</span>
+              </button>
+            </div>
+          </div>
+          <div className="trash-note-list" role="list" aria-label="Trash notes">
+            {visibleTrashedNotes.map((trashNote) => {
+              const title = getNoteDisplayTitle(trashNote);
+              const selected = selectedTrashNoteIds.has(trashNote.id);
+              return (
+                <div
+                  className={`trash-note-row${selected ? " is-selected" : ""}`}
+                  role="listitem"
+                  key={trashNote.id}
+                  aria-selected={selected}
+                  tabIndex={0}
+                  onClick={() => toggleTrashNoteSelection(trashNote.id)}
+                  onKeyDown={(event) => handleTrashRowKeyDown(event, trashNote.id)}
+                >
+                  <div className="trash-note-main">
+                    <TrashSelectionCheckbox
+                      ariaLabel={`Select ${title}`}
+                      checked={selected}
+                      onChange={() => toggleTrashNoteSelection(trashNote.id)}
+                    />
+                    <div className="trash-note-meta">
+                      <div className="trash-note-title">{title}</div>
+                      <div className="trash-note-date">
+                        {formatTrashTimestamp(trashNote.trashedAt)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="trash-note-row-actions">
+                    <button
+                      type="button"
+                      className="trash-preview-button has-tooltip"
+                      aria-label={`Preview ${title}`}
+                      data-tooltip="Preview"
+                      onMouseDown={(event) => {
+                        preventFocusLoss(event);
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPreviewTrashNoteId(trashNote.id);
+                      }}
+                    >
+                      <PreviewNoteIcon />
+                    </button>
                   </div>
                 </div>
-                <div className="trash-note-actions">
-                  <button
-                    type="button"
-                    className="trash-action-button"
-                    aria-label={`Restore ${title}`}
-                    onMouseDown={preventFocusLoss}
-                    onClick={() => void onRestoreNote?.(trashNote.id)}
-                  >
-                    <RestoreNoteIcon />
-                    <span>Restore</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="trash-action-button trash-action-danger"
-                    aria-label={`Delete permanently ${title}`}
-                    onMouseDown={preventFocusLoss}
-                    onClick={() => setPendingPurgeNote(trashNote)}
-                  >
-                    <PermanentDeleteIcon />
-                    <span>Delete</span>
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
-      {confirmPurgeNote && (
+      {confirmPurgeCount > 0 && (
         <div
           className="trash-confirm-backdrop"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
-              setPendingPurgeNote(null);
+              setPendingPurgeNoteIds([]);
             }
           }}
         >
@@ -3147,31 +4111,35 @@ function TrashPreferencesSection({
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div>
-              <div className="trash-confirm-title">Delete permanently?</div>
-              <div className="trash-confirm-message">
-                This note cannot be recovered after deletion.
+              <div className="trash-confirm-title">
+                {confirmPurgeNote ? "Delete permanently?" : "Delete selected permanently?"}
               </div>
-              <div className="trash-confirm-note">{confirmPurgeNote.title}</div>
+              <div className="trash-confirm-message">
+                {confirmPurgeNote
+                  ? "This note cannot be recovered after deletion."
+                  : "These notes cannot be recovered after deletion."}
+              </div>
+              <div className="trash-confirm-note">{confirmPurgeSummary}</div>
             </div>
             <div className="trash-confirm-actions">
               <button
                 type="button"
                 className="trash-confirm-button"
                 onMouseDown={preventFocusLoss}
-                onClick={() => setPendingPurgeNote(null)}
+                onClick={() => setPendingPurgeNoteIds([])}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 className="trash-confirm-button trash-confirm-danger"
-                aria-label={`Yes, permanently delete ${confirmPurgeNote.title}`}
+                aria-label={
+                  confirmPurgeNote
+                    ? `Yes, permanently delete ${confirmPurgeNote.title}`
+                    : `Yes, permanently delete ${confirmPurgeCount} selected notes`
+                }
                 onMouseDown={preventFocusLoss}
-                onClick={() => {
-                  const noteId = confirmPurgeNote.id;
-                  setPendingPurgeNote(null);
-                  void onPurgeNote?.(noteId);
-                }}
+                onClick={() => void purgePendingTrashNotes()}
               >
                 Yes
               </button>
@@ -3179,7 +4147,119 @@ function TrashPreferencesSection({
           </div>
         </div>
       )}
+      {previewTrashNote && (
+        <TrashPreviewDialog
+          note={previewTrashNote}
+          onClose={() => setPreviewTrashNoteId(null)}
+        />
+      )}
     </section>
+  );
+}
+
+function TrashSelectionCheckbox({
+  ariaLabel,
+  checked,
+  children = null,
+  className = "",
+  indeterminate = false,
+  onChange,
+}) {
+  const inputRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.indeterminate = indeterminate;
+    }
+  }, [indeterminate]);
+
+  return (
+    <label
+      className={`trash-selection-control ${className}`.trim()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        type="checkbox"
+        className="trash-selection-checkbox"
+        aria-label={ariaLabel}
+        checked={checked}
+        onChange={onChange}
+      />
+      <span className="trash-selection-check" aria-hidden="true">
+        {checked && <Check className="trash-selection-check-icon" size={13} strokeWidth={2.6} />}
+      </span>
+      {children && <span className="trash-selection-label">{children}</span>}
+    </label>
+  );
+}
+
+function TrashPreviewDialog({ note, onClose }) {
+  const noteTitle = getNoteDisplayTitle(note);
+  const previewLines = useMemo(() => getTrashPreviewLines(note), [note]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="trash-confirm-backdrop trash-preview-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="trash-preview-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Trash note preview"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="trash-preview-header">
+          <div>
+            <div className="trash-preview-kicker">Preview</div>
+            <div className="trash-preview-title">{noteTitle}</div>
+          </div>
+          <button
+            type="button"
+            className="trash-preview-close-button"
+            aria-label="Close preview"
+            onMouseDown={preventFocusLoss}
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="trash-preview-date">
+          {formatTrashTimestamp(note.trashedAt)}
+        </div>
+        <div className="trash-preview-content" role="document" tabIndex={0}>
+          {previewLines.length > 0 ? (
+            previewLines.map((line, index) => (
+              <p className="trash-preview-line" key={`${line}-${index}`}>
+                {line}
+              </p>
+            ))
+          ) : (
+            <div className="trash-preview-empty">No text content in this note.</div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3293,11 +4373,94 @@ function StickyTrashConfirmDialog({
   onCancel,
   onConfirm,
 }) {
-  const title = normalizeTitle(noteTitle);
+  return (
+    <MoveToTrashConfirmDialog
+      noteTitle={noteTitle}
+      ariaLabel="Move note to trash confirmation"
+      title="Move note to trash?"
+      message="This is different from closing a sticky window. The note will be hidden from tabs and sticky windows until restored from Trash."
+      yesAriaLabelPrefix="Yes, move"
+      backdropClassName="sticky-trash-confirm-backdrop"
+      dialogClassName="sticky-trash-confirm-dialog"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+function SessionTrashConfirmDialog({
+  noteTitle,
+  onCancel,
+  onConfirm,
+}) {
+  return (
+    <MoveToTrashConfirmDialog
+      noteTitle={noteTitle}
+      ariaLabel="Move session to trash confirmation"
+      title="Move session to Trash?"
+      message="This session will move to Trash. You can restore it from Trash or undo immediately."
+      yesAriaLabelPrefix="Yes, move"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+function MoveToTrashConfirmDialog({
+  noteTitle,
+  ariaLabel,
+  title,
+  message,
+  yesAriaLabelPrefix,
+  backdropClassName = "",
+  dialogClassName = "",
+  onCancel,
+  onConfirm,
+}) {
+  const normalizedNoteTitle = normalizeTitle(noteTitle);
+  const confirmButtonRef = useRef(null);
+  const hasConfirmedRef = useRef(false);
+
+  const confirmOnce = useCallback(() => {
+    if (hasConfirmedRef.current) {
+      return;
+    }
+    hasConfirmedRef.current = true;
+    onConfirm();
+  }, [onConfirm]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      confirmButtonRef.current?.focus();
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape" && event.key !== "Enter") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        onCancel();
+        return;
+      }
+
+      confirmOnce();
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [confirmOnce, onCancel]);
 
   return (
     <div
-      className="trash-confirm-backdrop sticky-trash-confirm-backdrop"
+      className={`trash-confirm-backdrop ${backdropClassName}`.trim()}
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
@@ -3306,19 +4469,18 @@ function StickyTrashConfirmDialog({
       }}
     >
       <div
-        className="trash-confirm-dialog sticky-trash-confirm-dialog"
+        className={`trash-confirm-dialog ${dialogClassName}`.trim()}
         role="dialog"
         aria-modal="true"
-        aria-label="Move note to trash confirmation"
+        aria-label={ariaLabel}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div>
-          <div className="trash-confirm-title">Move note to trash?</div>
+          <div className="trash-confirm-title">{title}</div>
           <div className="trash-confirm-message">
-            This is different from closing a sticky window. The note will be hidden
-            from tabs and sticky windows until restored from Trash.
+            {message}
           </div>
-          <div className="trash-confirm-note">{title}</div>
+          <div className="trash-confirm-note">{normalizedNoteTitle}</div>
         </div>
         <div className="trash-confirm-actions">
           <button
@@ -3332,9 +4494,10 @@ function StickyTrashConfirmDialog({
           <button
             type="button"
             className="trash-confirm-button trash-confirm-danger"
-            aria-label={`Yes, move ${title} to trash`}
+            aria-label={`${yesAriaLabelPrefix} ${normalizedNoteTitle} to trash`}
+            ref={confirmButtonRef}
             onMouseDown={preventFocusLoss}
-            onClick={onConfirm}
+            onClick={confirmOnce}
           >
             Yes
           </button>
@@ -3361,6 +4524,7 @@ function PreferencesWindow({
   initialPage = "general",
   appThemeMode,
   editorPreferences,
+  keyboardShortcuts,
   fontOptions,
   trashedNotes,
   onAppThemeModeChange,
@@ -3376,6 +4540,16 @@ function PreferencesWindow({
   useEffect(() => {
     setActivePage(normalizePreferencePageId(initialPage));
   }, [initialPage]);
+
+  const updateKeyboardShortcuts = useCallback(
+    (nextKeyboardShortcuts) => {
+      onEditorPreferencesChange?.({
+        ...normalizeEditorPreferences(editorPreferences),
+        keyboardShortcuts: normalizeKeyboardShortcuts(nextKeyboardShortcuts),
+      });
+    },
+    [editorPreferences, onEditorPreferencesChange],
+  );
 
   const renderActivePreferencePage = () => {
     if (activePage === "editor") {
@@ -3420,7 +4594,10 @@ function PreferencesWindow({
           role="tabpanel"
           aria-labelledby="preferences-tab-shortcuts"
         >
-          <KeyboardShortcutsSection />
+          <KeyboardShortcutsSection
+            keyboardShortcuts={keyboardShortcuts}
+            onKeyboardShortcutsChange={updateKeyboardShortcuts}
+          />
         </div>
       );
     }
@@ -3442,6 +4619,7 @@ function PreferencesWindow({
           </div>
           <HeaderModeSwitch
             mode={appThemeMode}
+            shortcut={keyboardShortcuts.toggleThemeMode}
             onChange={onAppThemeModeChange}
           />
         </div>
@@ -3513,7 +4691,7 @@ function PreferencesWindow({
   );
 }
 
-function HeaderModeSwitch({ mode, onChange }) {
+function HeaderModeSwitch({ mode, shortcut, onChange }) {
   const isDark = mode === "dark";
   return (
     <button
@@ -3522,7 +4700,7 @@ function HeaderModeSwitch({ mode, onChange }) {
       role="switch"
       aria-label="Theme mode"
       aria-checked={isDark}
-      data-tooltip={`${isDark ? "Light mode" : "Dark mode"} · ${getShortcutLabel("⇧L")}`}
+      data-tooltip={`${isDark ? "Light mode" : "Dark mode"} · ${getShortcutLabel(shortcut)}`}
       onMouseDown={preventFocusLoss}
       onClick={() => onChange(isDark ? "light" : "dark")}
     >
@@ -3551,13 +4729,13 @@ function PreferenceToggleSwitch({ checked, ariaLabel, onChange }) {
   );
 }
 
-function PreferencesButton({ onClick }) {
+function PreferencesButton({ shortcut, onClick }) {
   return (
     <button
       type="button"
       className="preferences-icon-button settings-icon-button has-tooltip"
       aria-label="Preferences"
-      data-tooltip={`Preferences · ${getShortcutLabel(",")}`}
+      data-tooltip={`Preferences · ${getShortcutLabel(shortcut)}`}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -3581,13 +4759,13 @@ function TrashButton({ onClick }) {
   );
 }
 
-function ExportPdfButton({ onClick }) {
+function ExportPdfButton({ shortcut, onClick }) {
   return (
     <button
       type="button"
       className="export-icon-button preferences-icon-button has-tooltip"
       aria-label="Export PDF"
-      data-tooltip={`Export PDF · ${getShortcutLabel("⇧E")}`}
+      data-tooltip={`Export PDF · ${getShortcutLabel(shortcut)}`}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -3596,14 +4774,14 @@ function ExportPdfButton({ onClick }) {
   );
 }
 
-function StickyPinButton({ isPinned = false, onClick }) {
+function StickyPinButton({ isPinned = false, shortcut, onClick }) {
   return (
     <button
       type="button"
       className="sticky-pin-button has-tooltip"
       aria-label={isPinned ? "Unpin window" : "Pin window"}
       aria-pressed={isPinned}
-      data-tooltip={`${isPinned ? "Unpin window" : "Pin window"} · ${getShortcutLabel("⇧P")}`}
+      data-tooltip={`${isPinned ? "Unpin window" : "Pin window"} · ${getShortcutLabel(shortcut)}`}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -3643,7 +4821,7 @@ function StickyTrashButton({ onClick }) {
   );
 }
 
-function LayoutModeSwitch({ mode, compact = false, onChange }) {
+function LayoutModeSwitch({ mode, compact = false, shortcut, onChange }) {
   const isSticky = mode === "sticky";
   const targetMode = isSticky ? "tabs" : "sticky";
   const targetModeLabel =
@@ -3656,7 +4834,7 @@ function LayoutModeSwitch({ mode, compact = false, onChange }) {
       aria-label={actionLabel}
       aria-pressed={isSticky}
       data-layout-mode-target={targetMode}
-      data-tooltip={`${actionLabel} · ${getShortcutLabel("⇧M")}`}
+      data-tooltip={`${actionLabel} · ${getShortcutLabel(shortcut)}`}
       onMouseDown={preventFocusLoss}
       onClick={onChange}
     >
@@ -3783,6 +4961,20 @@ function CopyValueIcon() {
       data-icon-family="system-symbol"
       data-icon-pack="lucide"
       data-icon-tone="copy"
+      size={15}
+      strokeWidth={2}
+      aria-hidden="true"
+    />
+  );
+}
+
+function PreviewNoteIcon() {
+  return (
+    <Eye
+      className="notepane-action-icon notepane-icon-preview"
+      data-icon-family="system-symbol"
+      data-icon-pack="lucide"
+      data-icon-tone="sidebar"
       size={15}
       strokeWidth={2}
       aria-hidden="true"
@@ -4222,9 +5414,58 @@ function mergeNotes(notes, updatedNote) {
     });
   }
 
-  return [...noteMap.values()].sort(
-    (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0),
+  return [...noteMap.values()].sort(sortNotesByOrder);
+}
+
+function reorderNotesByIds(notes, orderedNoteIds) {
+  const currentNotes = Array.isArray(notes) ? notes : [];
+  const noteMap = new Map(currentNotes.map((note) => [note.id, note]));
+  const orderedIds = normalizeOrderedNoteIds(orderedNoteIds);
+  const nextNotes = [];
+  const seenIds = new Set();
+
+  for (const noteId of orderedIds) {
+    const note = noteMap.get(noteId);
+    if (!note || seenIds.has(note.id)) {
+      continue;
+    }
+    nextNotes.push(note);
+    seenIds.add(note.id);
+  }
+
+  for (const note of currentNotes) {
+    if (!seenIds.has(note.id)) {
+      nextNotes.push(note);
+    }
+  }
+
+  return nextNotes.map((note, index) => ({
+    ...note,
+    sortOrder: index + 1,
+  }));
+}
+
+function sortNotesByOrder(a, b) {
+  return (
+    (normalizeSortOrder(a?.sortOrder) ?? Number.POSITIVE_INFINITY) -
+      (normalizeSortOrder(b?.sortOrder) ?? Number.POSITIVE_INFINITY) ||
+    (a?.createdAt ?? 0) - (b?.createdAt ?? 0)
   );
+}
+
+function normalizeOrderedNoteIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((noteId) => typeof noteId === "string" && noteId);
+}
+
+function normalizeSortOrder(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
 }
 
 function mergeTrashedNotes(notes, updatedNote) {
@@ -4351,12 +5592,105 @@ function formatTrashTimestamp(value) {
   })}`;
 }
 
-function getSessionShortcutLabel(index) {
-  return getShortcutLabel(String(index + 1));
+function getTrashPreviewLines(note) {
+  const blocks = parseBlocksJSON(note?.blocksJSON);
+  if (Array.isArray(blocks)) {
+    const blockLines = [];
+    collectBlocks(blocks, (block) => {
+      const line = getBlockPreviewLine(block);
+      if (line) {
+        blockLines.push(line);
+      }
+    });
+    const normalizedBlockLines = normalizeTrashPreviewLines(blockLines);
+    if (normalizedBlockLines.length > 0) {
+      return normalizedBlockLines;
+    }
+  }
+
+  if (typeof note?.markdown === "string" && note.markdown.trim()) {
+    return normalizeTrashPreviewLines(note.markdown.split(/\r?\n/));
+  }
+
+  return [];
 }
 
-function getShortcutLabel(keys) {
-  const normalizedKeys = String(keys);
+function getBlockPreviewLine(block) {
+  const plainText = normalizePreviewText(extractBlockPlainText(block?.content));
+  if (plainText) {
+    return plainText;
+  }
+
+  if (block?.type === "image") {
+    return "Image";
+  }
+
+  if (block?.type === "file") {
+    return "Attachment";
+  }
+
+  return "";
+}
+
+function normalizeTrashPreviewLines(lines) {
+  const normalizedLines = [];
+  for (const line of lines) {
+    const normalizedLine = normalizePreviewText(line);
+    if (!normalizedLine) {
+      continue;
+    }
+
+    normalizedLines.push(
+      normalizedLine.length > 260
+        ? `${normalizedLine.slice(0, 257)}...`
+        : normalizedLine,
+    );
+    if (normalizedLines.length >= 36) {
+      break;
+    }
+  }
+
+  return normalizedLines;
+}
+
+function normalizePreviewText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function getSessionShortcutLabel(index) {
+  return getShortcutLabel(`Mod+${index + 1}`);
+}
+
+function getShortcutLabel(shortcut) {
+  const parsedShortcut = parseKeyboardShortcut(shortcut);
+  if (!parsedShortcut) {
+    return getLegacyShortcutLabel(shortcut);
+  }
+
+  const keyLabel = getShortcutKeyLabel(parsedShortcut.key);
+  if (!isWindowsRuntime()) {
+    return [
+      parsedShortcut.mod ? "⌘" : "",
+      parsedShortcut.alt ? "⌥" : "",
+      parsedShortcut.shift ? "⇧" : "",
+      keyLabel,
+    ].filter(Boolean).join("");
+  }
+
+  return [
+    parsedShortcut.mod ? "Ctrl" : "",
+    parsedShortcut.alt ? "Alt" : "",
+    parsedShortcut.shift ? "Shift" : "",
+    keyLabel,
+  ].filter(Boolean).join("+");
+}
+
+function getLegacyShortcutLabel(keys) {
+  const normalizedKeys = String(keys ?? "");
+  if (!normalizedKeys) {
+    return "";
+  }
+
   if (!isWindowsRuntime()) {
     return `⌘${normalizedKeys}`;
   }
@@ -4364,6 +5698,253 @@ function getShortcutLabel(keys) {
   return `Ctrl+${normalizedKeys
     .replaceAll("⌥", "Alt+")
     .replaceAll("⇧", "Shift+")}`;
+}
+
+function getShortcutKeyLabel(key) {
+  const labels = {
+    ArrowLeft: "←",
+    ArrowRight: "→",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    Enter: "↩",
+    Escape: "Esc",
+    Space: "Space",
+    "=": "+",
+  };
+
+  return labels[key] ?? key;
+}
+
+function matchesKeyboardShortcut(event, shortcut) {
+  const parsedShortcut = parseKeyboardShortcut(shortcut);
+  if (!parsedShortcut) {
+    return false;
+  }
+
+  const eventKey = normalizeKeyboardShortcutEventKey(event);
+  if (!eventKey) {
+    return false;
+  }
+
+  const shiftMatches =
+    Boolean(event.shiftKey) === parsedShortcut.shift ||
+    (parsedShortcut.key === "=" && !parsedShortcut.shift && event.shiftKey);
+
+  return (
+    Boolean(event.metaKey || event.ctrlKey) === parsedShortcut.mod &&
+    Boolean(event.altKey) === parsedShortcut.alt &&
+    shiftMatches &&
+    eventKey === parsedShortcut.key
+  );
+}
+
+function keyboardShortcutFromEvent(event) {
+  const key = normalizeKeyboardShortcutEventKey(event);
+  if (!key || key === "Escape") {
+    return null;
+  }
+
+  const shortcut = {
+    mod: Boolean(event.metaKey || event.ctrlKey),
+    alt: Boolean(event.altKey),
+    shift: Boolean(event.shiftKey),
+    key,
+  };
+
+  return shortcut.mod ? formatKeyboardShortcutValue(shortcut) : null;
+}
+
+function normalizeKeyboardShortcuts(
+  value,
+  fallback = DEFAULT_KEYBOARD_SHORTCUTS,
+) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object"
+    ? fallback
+    : DEFAULT_KEYBOARD_SHORTCUTS;
+  const normalizedShortcuts = {};
+
+  for (const commandId of KEYBOARD_SHORTCUT_COMMAND_IDS) {
+    normalizedShortcuts[commandId] = normalizeKeyboardShortcut(
+      source[commandId],
+      fallbackSource[commandId] ?? DEFAULT_KEYBOARD_SHORTCUTS[commandId],
+    );
+  }
+
+  return normalizedShortcuts;
+}
+
+function normalizeKeyboardShortcut(value, fallback) {
+  const parsedShortcut = parseKeyboardShortcut(value);
+  if (parsedShortcut) {
+    return formatKeyboardShortcutValue(parsedShortcut);
+  }
+
+  const parsedFallback = parseKeyboardShortcut(fallback);
+  return parsedFallback
+    ? formatKeyboardShortcutValue(parsedFallback)
+    : DEFAULT_KEYBOARD_SHORTCUTS.focusEditor;
+}
+
+function parseKeyboardShortcut(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const tokens = value
+    .split("+")
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length < 2) {
+    return null;
+  }
+
+  const shortcut = {
+    mod: false,
+    alt: false,
+    shift: false,
+    key: "",
+  };
+
+  for (const token of tokens) {
+    const normalizedToken = token.toLowerCase();
+    if (
+      normalizedToken === "mod" ||
+      normalizedToken === "cmd" ||
+      normalizedToken === "command" ||
+      normalizedToken === "ctrl" ||
+      normalizedToken === "control" ||
+      normalizedToken === "commandorcontrol" ||
+      normalizedToken === "cmdorctrl"
+    ) {
+      shortcut.mod = true;
+      continue;
+    }
+
+    if (normalizedToken === "alt" || normalizedToken === "option") {
+      shortcut.alt = true;
+      continue;
+    }
+
+    if (normalizedToken === "shift") {
+      shortcut.shift = true;
+      continue;
+    }
+
+    if (shortcut.key) {
+      return null;
+    }
+
+    shortcut.key = normalizeKeyboardShortcutKey(token);
+    if (!shortcut.key) {
+      return null;
+    }
+  }
+
+  return shortcut.mod && shortcut.key ? shortcut : null;
+}
+
+function normalizeKeyboardShortcutEventKey(event) {
+  if (
+    event.key === "Meta" ||
+    event.key === "Control" ||
+    event.key === "Alt" ||
+    event.key === "Shift"
+  ) {
+    return "";
+  }
+
+  if (
+    event.code === "Equal" &&
+    (event.key === "+" || event.key === "=")
+  ) {
+    return "=";
+  }
+
+  if (
+    event.code === "Minus" &&
+    (event.key === "-" || event.key === "_")
+  ) {
+    return "-";
+  }
+
+  return normalizeKeyboardShortcutKey(event.key);
+}
+
+function normalizeKeyboardShortcutKey(value) {
+  const token = String(value ?? "").trim();
+  const normalizedToken = token.toLowerCase();
+  const namedKeys = {
+    arrowleft: "ArrowLeft",
+    left: "ArrowLeft",
+    arrowright: "ArrowRight",
+    right: "ArrowRight",
+    arrowup: "ArrowUp",
+    up: "ArrowUp",
+    arrowdown: "ArrowDown",
+    down: "ArrowDown",
+    enter: "Enter",
+    return: "Enter",
+    escape: "Escape",
+    esc: "Escape",
+    comma: ",",
+    period: ".",
+    dot: ".",
+    slash: "/",
+    backslash: "\\",
+    backquote: "`",
+    equal: "=",
+    plus: "=",
+    minus: "-",
+    space: "Space",
+  };
+
+  if (namedKeys[normalizedToken]) {
+    return namedKeys[normalizedToken];
+  }
+
+  if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(token)) {
+    return token.toUpperCase();
+  }
+
+  if (/^[a-z]$/i.test(token)) {
+    return token.toUpperCase();
+  }
+
+  if (/^[0-9]$/.test(token)) {
+    return token;
+  }
+
+  if (token.length === 1 && ",./;'[]\\=`-".includes(token)) {
+    return token;
+  }
+
+  return "";
+}
+
+function formatKeyboardShortcutValue(shortcut) {
+  return [
+    shortcut.mod ? "Mod" : "",
+    shortcut.alt ? "Alt" : "",
+    shortcut.shift ? "Shift" : "",
+    shortcut.key,
+  ].filter(Boolean).join("+");
+}
+
+function isReservedKeyboardShortcut(shortcut) {
+  const parsedShortcut = parseKeyboardShortcut(shortcut);
+  return Boolean(
+    parsedShortcut?.mod &&
+      !parsedShortcut.alt &&
+      !parsedShortcut.shift &&
+      /^[1-9]$/.test(parsedShortcut.key),
+  );
+}
+
+function isShortcutRecorderTarget(target) {
+  return target instanceof Element && Boolean(
+    target.closest(".shortcut-recorder-button"),
+  );
 }
 
 function isWindowsRuntime() {
@@ -4803,8 +6384,13 @@ function DropdownMenuOption({
 function AdaptiveTooltipPortal() {
   const [tooltip, setTooltip] = useState(null);
   const targetRef = useRef(null);
+  const isPointerDownRef = useRef(false);
 
   const showTooltip = useCallback((target) => {
+    if (isPointerDownRef.current) {
+      return;
+    }
+
     const text = target?.getAttribute?.("data-tooltip")?.trim();
     if (!text) {
       return;
@@ -4825,6 +6411,10 @@ function AdaptiveTooltipPortal() {
 
   useEffect(() => {
     const handlePointerOver = (event) => {
+      if (isPointerDownRef.current) {
+        return;
+      }
+
       const target = getTooltipTarget(event.target);
       if (!target) {
         return;
@@ -4857,6 +6447,10 @@ function AdaptiveTooltipPortal() {
     };
 
     const handleFocusIn = (event) => {
+      if (isPointerDownRef.current) {
+        return;
+      }
+
       const target = getTooltipTarget(event.target);
       if (target) {
         showTooltip(target);
@@ -4876,18 +6470,49 @@ function AdaptiveTooltipPortal() {
       }
     };
 
+    const handlePointerDown = () => {
+      isPointerDownRef.current = true;
+      hideTooltip();
+    };
+
+    const handlePointerUp = () => {
+      isPointerDownRef.current = false;
+    };
+
+    const handleDragStart = () => {
+      isPointerDownRef.current = true;
+      hideTooltip();
+    };
+
+    const handleDragEnd = () => {
+      isPointerDownRef.current = false;
+      hideTooltip();
+    };
+
     document.addEventListener("pointerover", handlePointerOver, true);
     document.addEventListener("pointerout", handlePointerOut, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("pointerup", handlePointerUp, true);
+    document.addEventListener("pointercancel", handleDragEnd, true);
     document.addEventListener("focusin", handleFocusIn, true);
     document.addEventListener("focusout", handleFocusOut, true);
     document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("dragstart", handleDragStart, true);
+    document.addEventListener("dragend", handleDragEnd, true);
+    document.addEventListener("drop", handleDragEnd, true);
 
     return () => {
       document.removeEventListener("pointerover", handlePointerOver, true);
       document.removeEventListener("pointerout", handlePointerOut, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("pointerup", handlePointerUp, true);
+      document.removeEventListener("pointercancel", handleDragEnd, true);
       document.removeEventListener("focusin", handleFocusIn, true);
       document.removeEventListener("focusout", handleFocusOut, true);
       document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("dragstart", handleDragStart, true);
+      document.removeEventListener("dragend", handleDragEnd, true);
+      document.removeEventListener("drop", handleDragEnd, true);
     };
   }, [hideTooltip, showTooltip]);
 
@@ -5355,6 +6980,10 @@ function normalizeEditorPreferences(
       typeof source.showTableOfContents === "boolean"
         ? source.showTableOfContents
         : Boolean(fallbackSource.showTableOfContents),
+    keyboardShortcuts: normalizeKeyboardShortcuts(
+      source.keyboardShortcuts,
+      fallbackSource.keyboardShortcuts,
+    ),
   };
 }
 
@@ -6302,6 +7931,115 @@ function clamp(value, minimum, maximum, fallback = minimum) {
   }
 
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function moveArrayItem(items, fromIndex, toIndex) {
+  if (
+    !Array.isArray(items) ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return Array.isArray(items) ? [...items] : [];
+  }
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(fromIndex, 1);
+  nextItems.splice(toIndex, 0, item);
+  return nextItems;
+}
+
+function getReorderedNoteIdsForDrop(
+  noteIds,
+  sourceNoteId,
+  targetNoteId,
+  insertionSide = "before",
+) {
+  const currentNoteIds = Array.isArray(noteIds) ? noteIds : [];
+  const sourceIndex = currentNoteIds.indexOf(sourceNoteId);
+  const targetIndex = currentNoteIds.indexOf(targetNoteId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceNoteId === targetNoteId) {
+    return [...currentNoteIds];
+  }
+
+  const nextNoteIds = currentNoteIds.filter((noteId) => noteId !== sourceNoteId);
+  const targetIndexAfterRemoval = nextNoteIds.indexOf(targetNoteId);
+  const insertionIndex = insertionSide === "after"
+    ? targetIndexAfterRemoval + 1
+    : targetIndexAfterRemoval;
+  nextNoteIds.splice(clamp(insertionIndex, 0, nextNoteIds.length), 0, sourceNoteId);
+  return nextNoteIds;
+}
+
+function arraysEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
+}
+
+function isPointInsideElement(event, element) {
+  if (!(element instanceof Element)) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return (
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
+  );
+}
+
+function getSessionTabRects(rowMap) {
+  const rects = new Map();
+  for (const [noteId, element] of rowMap.entries()) {
+    if (element instanceof Element) {
+      rects.set(noteId, element.getBoundingClientRect());
+    }
+  }
+  return rects;
+}
+
+function animateSessionTabReorder(rowMap, previousRects) {
+  const animatedRows = [];
+  for (const [noteId, element] of rowMap.entries()) {
+    const previousRect = previousRects.get(noteId);
+    if (!previousRect || !(element instanceof HTMLElement)) {
+      continue;
+    }
+
+    const nextRect = element.getBoundingClientRect();
+    const deltaY = previousRect.top - nextRect.top;
+    if (Math.abs(deltaY) < 1) {
+      continue;
+    }
+
+    element.classList.add("is-reorder-animating");
+    element.style.transition = "none";
+    element.style.setProperty("--session-tab-reorder-y", `${deltaY}px`);
+    animatedRows.push(element);
+  }
+
+  if (animatedRows.length === 0) {
+    return;
+  }
+
+  animatedRows[0].getBoundingClientRect();
+  window.requestAnimationFrame(() => {
+    for (const element of animatedRows) {
+      element.style.transition = "";
+      element.style.setProperty("--session-tab-reorder-y", "0px");
+      window.setTimeout(() => {
+        element.classList.remove("is-reorder-animating");
+        element.style.removeProperty("--session-tab-reorder-y");
+      }, SESSION_TAB_REORDER_ANIMATION_MS);
+    }
+  });
 }
 
 function nextAnimationFrame() {

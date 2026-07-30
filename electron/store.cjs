@@ -19,11 +19,33 @@ const DEFAULT_EDITOR_FONT_SCALE = 1;
 const MIN_EDITOR_FONT_SCALE = 0.38;
 const MAX_EDITOR_FONT_SCALE = 9;
 const DEFAULT_EDITOR_FONT_FAMILY = "system";
+const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
+  newSession: "Mod+T",
+  newNote: "Mod+N",
+  closeWindow: "Mod+W",
+  focusEditor: "Mod+Enter",
+  previousTab: "Mod+Alt+ArrowLeft",
+  nextTab: "Mod+Alt+ArrowRight",
+  moveTabLeft: "Mod+Shift+ArrowLeft",
+  moveTabRight: "Mod+Shift+ArrowRight",
+  toggleSidebar: "Mod+Shift+B",
+  toggleLayoutMode: "Mod+Shift+M",
+  toggleThemeMode: "Mod+Shift+L",
+  exportPdf: "Mod+Shift+E",
+  preferences: "Mod+,",
+  increaseEditorFontSize: "Mod+=",
+  decreaseEditorFontSize: "Mod+-",
+  attachDetachedNote: "Mod+Shift+D",
+  toggleAlwaysOnTop: "Mod+Shift+P",
+});
+const LEGACY_DEFAULT_TOGGLE_SIDEBAR_SHORTCUT = "Mod+B";
 const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
   showTableOfContents: false,
+  keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
 });
+const KEYBOARD_SHORTCUT_COMMAND_IDS = Object.keys(DEFAULT_KEYBOARD_SHORTCUTS);
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_FONT_FAMILIES = new Set([
   "system",
@@ -79,7 +101,9 @@ class StickyStore {
         : 1;
       const resetLegacyAlwaysOnTop = version < 3;
       const editorPreferences = normalizeEditorPreferences(
-        parsedObject.editorPreferences,
+        version < 8
+          ? migrateLegacyEditorPreferences(parsedObject.editorPreferences)
+          : parsedObject.editorPreferences,
       );
       this.state = {
         appTheme: normalizeAppTheme(
@@ -89,8 +113,10 @@ class StickyStore {
         ),
         layoutMode: normalizeLayoutMode(parsedObject.layoutMode),
         editorPreferences,
-        notes: rawNotes.map((note) =>
-          normalizeNote(note, { resetLegacyAlwaysOnTop, editorPreferences }),
+        notes: backfillMissingSortOrders(
+          rawNotes.map((note) =>
+            normalizeNote(note, { resetLegacyAlwaysOnTop, editorPreferences }),
+          ),
         ),
       };
     } catch (error) {
@@ -141,7 +167,7 @@ class StickyStore {
   listNotes() {
     return this.state.notes
       .filter((note) => !isTrashedNote(note))
-      .sort(sortNotesByCreatedAt);
+      .sort(sortNotesByOrder);
   }
 
   listTrash() {
@@ -184,6 +210,7 @@ class StickyStore {
         ? options.editorFontFamily
         : editorPreferences.editorFontFamily,
       trashedAt: null,
+      sortOrder: nextNoteSortOrder(this.state.notes),
       createdAt: now,
       updatedAt: now,
     });
@@ -271,6 +298,46 @@ class StickyStore {
 
     return {
       deleted: true,
+      notes: this.listNotes(),
+      trash: this.listTrash(),
+    };
+  }
+
+  reorderNotes(orderedNoteIds) {
+    const orderedIds = normalizeOrderedNoteIds(orderedNoteIds);
+    const activeNotes = this.listNotes();
+    if (orderedIds.length === 0 || activeNotes.length <= 1) {
+      return {
+        notes: activeNotes,
+        trash: this.listTrash(),
+      };
+    }
+
+    const activeNotesById = new Map(activeNotes.map((note) => [note.id, note]));
+    const nextOrderedNotes = [];
+    const seenIds = new Set();
+
+    for (const noteId of orderedIds) {
+      const note = activeNotesById.get(noteId);
+      if (!note || seenIds.has(note.id)) {
+        continue;
+      }
+      nextOrderedNotes.push(note);
+      seenIds.add(note.id);
+    }
+
+    for (const note of activeNotes) {
+      if (!seenIds.has(note.id)) {
+        nextOrderedNotes.push(note);
+      }
+    }
+
+    nextOrderedNotes.forEach((note, index) => {
+      note.sortOrder = index + 1;
+    });
+    this.save();
+
+    return {
       notes: this.listNotes(),
       trash: this.listTrash(),
     };
@@ -364,7 +431,7 @@ class StickyStore {
       temporaryPath,
       JSON.stringify(
         {
-          version: 6,
+          version: 9,
           appTheme: this.state.appTheme,
           layoutMode: this.state.layoutMode,
           editorPreferences: this.state.editorPreferences,
@@ -441,13 +508,75 @@ function normalizeNote(value, options = {}) {
       editorPreferences.editorFontFamily,
     ),
     trashedAt: normalizeTimestamp(source.trashedAt),
+    sortOrder: normalizeSortOrder(source.sortOrder),
     createdAt: Number.isFinite(source.createdAt) ? source.createdAt : now,
     updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : now,
   };
 }
 
+function sortNotesByOrder(a, b) {
+  return (
+    (a.sortOrder ?? Number.POSITIVE_INFINITY) -
+      (b.sortOrder ?? Number.POSITIVE_INFINITY) ||
+    (a.createdAt ?? 0) - (b.createdAt ?? 0)
+  );
+}
+
+function nextNoteSortOrder(notes) {
+  return notes
+    .filter((note) => !isTrashedNote(note))
+    .reduce(
+      (maximum, note) =>
+        Math.max(maximum, Number.isFinite(note.sortOrder) ? note.sortOrder : 0),
+      0,
+    ) + 1;
+}
+
+function backfillMissingSortOrders(notes) {
+  const usedOrders = new Set(
+    notes
+      .map((note) => note.sortOrder)
+      .filter((sortOrder) => Number.isFinite(sortOrder) && sortOrder > 0),
+  );
+  let nextSortOrder = notes.reduce(
+    (maximum, note) =>
+      Math.max(maximum, Number.isFinite(note.sortOrder) ? note.sortOrder : 0),
+    0,
+  ) + 1;
+
+  for (const note of [...notes].sort(sortNotesByCreatedAt)) {
+    if (Number.isFinite(note.sortOrder) && note.sortOrder > 0) {
+      continue;
+    }
+
+    while (usedOrders.has(nextSortOrder)) {
+      nextSortOrder += 1;
+    }
+    note.sortOrder = nextSortOrder;
+    usedOrders.add(nextSortOrder);
+    nextSortOrder += 1;
+  }
+
+  return notes;
+}
+
 function sortNotesByCreatedAt(a, b) {
   return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+}
+
+function normalizeOrderedNoteIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((noteId) => typeof noteId === "string" && noteId);
+}
+
+function normalizeSortOrder(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue
+    : null;
 }
 
 function isTrashedNote(note) {
@@ -583,6 +712,33 @@ function stripMarkdownTitleSyntax(value) {
     .replace(/[*_`~]/g, "");
 }
 
+function migrateLegacyEditorPreferences(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const keyboardShortcuts = source.keyboardShortcuts;
+  if (!keyboardShortcuts || typeof keyboardShortcuts !== "object") {
+    return value;
+  }
+
+  const parsedToggleSidebar = parseKeyboardShortcut(
+    keyboardShortcuts.toggleSidebar,
+  );
+  if (
+    !parsedToggleSidebar ||
+    formatKeyboardShortcutValue(parsedToggleSidebar) !==
+      LEGACY_DEFAULT_TOGGLE_SIDEBAR_SHORTCUT
+  ) {
+    return value;
+  }
+
+  return {
+    ...source,
+    keyboardShortcuts: {
+      ...keyboardShortcuts,
+      toggleSidebar: DEFAULT_KEYBOARD_SHORTCUTS.toggleSidebar,
+    },
+  };
+}
+
 function normalizeAppTheme(value, fallback = DEFAULT_APP_THEME) {
   const source = value && typeof value === "object" ? value : {};
   const fallbackTheme = fallback && typeof fallback === "object"
@@ -638,7 +794,161 @@ function normalizeEditorPreferences(
       typeof source.showTableOfContents === "boolean"
         ? source.showTableOfContents
         : Boolean(fallbackSource.showTableOfContents),
+    keyboardShortcuts: normalizeKeyboardShortcuts(
+      source.keyboardShortcuts,
+      fallbackSource.keyboardShortcuts,
+    ),
   };
+}
+
+function normalizeKeyboardShortcuts(
+  value,
+  fallback = DEFAULT_KEYBOARD_SHORTCUTS,
+) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object"
+    ? fallback
+    : DEFAULT_KEYBOARD_SHORTCUTS;
+  const normalizedShortcuts = {};
+
+  for (const commandId of KEYBOARD_SHORTCUT_COMMAND_IDS) {
+    normalizedShortcuts[commandId] = normalizeKeyboardShortcut(
+      source[commandId],
+      fallbackSource[commandId] ?? DEFAULT_KEYBOARD_SHORTCUTS[commandId],
+    );
+  }
+
+  return normalizedShortcuts;
+}
+
+function normalizeKeyboardShortcut(value, fallback) {
+  const parsedShortcut = parseKeyboardShortcut(value);
+  if (parsedShortcut) {
+    return formatKeyboardShortcutValue(parsedShortcut);
+  }
+
+  const parsedFallback = parseKeyboardShortcut(fallback);
+  return parsedFallback
+    ? formatKeyboardShortcutValue(parsedFallback)
+    : DEFAULT_KEYBOARD_SHORTCUTS.focusEditor;
+}
+
+function parseKeyboardShortcut(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const tokens = value
+    .split("+")
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length < 2) {
+    return null;
+  }
+
+  const shortcut = {
+    mod: false,
+    alt: false,
+    shift: false,
+    key: "",
+  };
+
+  for (const token of tokens) {
+    const normalizedToken = token.toLowerCase();
+    if (
+      normalizedToken === "mod" ||
+      normalizedToken === "cmd" ||
+      normalizedToken === "command" ||
+      normalizedToken === "ctrl" ||
+      normalizedToken === "control" ||
+      normalizedToken === "commandorcontrol" ||
+      normalizedToken === "cmdorctrl"
+    ) {
+      shortcut.mod = true;
+      continue;
+    }
+
+    if (normalizedToken === "alt" || normalizedToken === "option") {
+      shortcut.alt = true;
+      continue;
+    }
+
+    if (normalizedToken === "shift") {
+      shortcut.shift = true;
+      continue;
+    }
+
+    if (shortcut.key) {
+      return null;
+    }
+
+    shortcut.key = normalizeKeyboardShortcutKey(token);
+    if (!shortcut.key) {
+      return null;
+    }
+  }
+
+  return shortcut.mod && shortcut.key ? shortcut : null;
+}
+
+function normalizeKeyboardShortcutKey(value) {
+  const token = String(value ?? "").trim();
+  const normalizedToken = token.toLowerCase();
+  const namedKeys = {
+    arrowleft: "ArrowLeft",
+    left: "ArrowLeft",
+    arrowright: "ArrowRight",
+    right: "ArrowRight",
+    arrowup: "ArrowUp",
+    up: "ArrowUp",
+    arrowdown: "ArrowDown",
+    down: "ArrowDown",
+    enter: "Enter",
+    return: "Enter",
+    escape: "Escape",
+    esc: "Escape",
+    comma: ",",
+    period: ".",
+    dot: ".",
+    slash: "/",
+    backslash: "\\",
+    backquote: "`",
+    equal: "=",
+    plus: "=",
+    minus: "-",
+    space: "Space",
+  };
+
+  if (namedKeys[normalizedToken]) {
+    return namedKeys[normalizedToken];
+  }
+
+  if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(token)) {
+    return token.toUpperCase();
+  }
+
+  if (/^[a-z]$/i.test(token)) {
+    return token.toUpperCase();
+  }
+
+  if (/^[0-9]$/.test(token)) {
+    return token;
+  }
+
+  if (token.length === 1 && ",./;'[]\\=`-".includes(token)) {
+    return token;
+  }
+
+  return null;
+}
+
+function formatKeyboardShortcutValue(shortcut) {
+  return [
+    shortcut.mod ? "Mod" : "",
+    shortcut.alt ? "Alt" : "",
+    shortcut.shift ? "Shift" : "",
+    shortcut.key,
+  ].filter(Boolean).join("+");
 }
 
 function normalizeTheme(value, fallback = DEFAULT_NOTE_THEME) {
@@ -788,4 +1098,5 @@ module.exports = {
   DEFAULT_THEME,
   DEFAULT_EDITOR_FONT_SCALE,
   DEFAULT_EDITOR_FONT_FAMILY,
+  DEFAULT_KEYBOARD_SHORTCUTS,
 };

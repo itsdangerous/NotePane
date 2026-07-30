@@ -350,6 +350,16 @@ test("shows table of contents in tab mode only when enabled from preferences", a
   await page.keyboard.press(modifierShortcut(","));
   const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
   await expect(preferencesPanel).toBeVisible();
+  const preferencesMetrics = await preferencesPanel.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      height: Math.round(rect.height),
+      minHeight: Number.parseFloat(style.minHeight),
+    };
+  });
+  expect(preferencesMetrics.height).toBeGreaterThanOrEqual(560);
+  expect(preferencesMetrics.minHeight).toBeGreaterThanOrEqual(560);
   await preferencesPanel.getByRole("tab", { name: "Editor" }).click();
   const tocSwitch = preferencesPanel.getByRole("switch", {
     name: "Show table of contents",
@@ -361,6 +371,33 @@ test("shows table of contents in tab mode only when enabled from preferences", a
 
   const tableOfContents = page.getByTestId("editor-toc");
   await expect(tableOfContents).toBeVisible();
+  const tocMetrics = await tableOfContents.evaluate((toc) => {
+    const list = toc.querySelector(".editor-toc-list");
+    const entry = toc.querySelector(".editor-toc-entry");
+    const editor = document.querySelector(".sticky-editor-surface .bn-editor");
+    const tocStyle = getComputedStyle(toc);
+    const listStyle = getComputedStyle(list);
+    const entryStyle = getComputedStyle(entry);
+    return {
+      editorPaddingRight: Number.parseFloat(getComputedStyle(editor).paddingRight),
+      entryTextOverflow: entryStyle.textOverflow,
+      entryWhiteSpace: entryStyle.whiteSpace,
+      listClientWidth: list.clientWidth,
+      listOverflowX: listStyle.overflowX,
+      listOverflowY: listStyle.overflowY,
+      listScrollWidth: list.scrollWidth,
+      maxHeight: Number.parseFloat(tocStyle.maxHeight),
+      width: Math.round(toc.getBoundingClientRect().width),
+    };
+  });
+  expect(tocMetrics.width).toBeGreaterThanOrEqual(200);
+  expect(tocMetrics.maxHeight).toBeGreaterThanOrEqual(600);
+  expect(tocMetrics.editorPaddingRight).toBeGreaterThanOrEqual(tocMetrics.width);
+  expect(tocMetrics.entryWhiteSpace).toBe("normal");
+  expect(tocMetrics.entryTextOverflow).toBe("clip");
+  expect(tocMetrics.listOverflowX).toBe("hidden");
+  expect(tocMetrics.listOverflowY).toBe("auto");
+  expect(tocMetrics.listScrollWidth).toBeLessThanOrEqual(tocMetrics.listClientWidth);
   await expect(tableOfContents.getByRole("button", {
     name: /Jump to Welcome to BlockNote!, heading level 1/,
   })).toBeVisible();
@@ -641,6 +678,34 @@ test("supports light/dark mode and readable sidebar tab background customization
 
   expect(styles.bodyBackground).toBe("rgba(0, 0, 0, 0)");
   expect(styles.removedGlobalBackgroundVar).toBe("");
+});
+
+test("customizes keyboard shortcuts from preferences", async ({ page }) => {
+  const sidebar = page.getByTestId("session-sidebar");
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "expanded");
+
+  await page.keyboard.press(modifierShortcut(","));
+  const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(preferencesPanel).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Shortcuts" }).click();
+
+  const toggleSidebarShortcut = preferencesPanel.getByRole("button", {
+    name: "Shortcut for Toggle sidebar",
+  });
+  await expect(toggleSidebarShortcut).toContainText("B");
+  await expect(toggleSidebarShortcut).toContainText(/Shift|⇧/);
+  await toggleSidebarShortcut.click();
+  await expect(toggleSidebarShortcut).toHaveText("Recording");
+  await page.keyboard.press(modifierShortcut("Shift+Y"));
+  await expect(toggleSidebarShortcut).toContainText("Y");
+
+  await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+  await expect(preferencesPanel).toHaveCount(0);
+
+  await page.keyboard.press(modifierShortcut("Shift+Y"));
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
+  await page.keyboard.press(modifierShortcut("Shift+Y"));
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "expanded");
 });
 
 test("uses sticky pastel color and carries it back to the session tab", async ({ page }) => {
@@ -1449,6 +1514,78 @@ async function getTabCssValue(page, tabIndex, property) {
   );
 }
 
+async function getSessionTabNoteIds(page) {
+  return await page.evaluate(() =>
+    [...document.querySelectorAll(".session-tab-row")]
+      .map((row) => row.getAttribute("data-note-id"))
+      .filter(Boolean),
+  );
+}
+
+async function getActiveSessionTabNoteId(page) {
+  return await page.evaluate(() => {
+    const activeTab = document.querySelector("[role='tab'][aria-selected='true']");
+    return activeTab?.closest(".session-tab-row")?.getAttribute("data-note-id") ?? null;
+  });
+}
+
+async function expectSessionTabReorderAnimation(page) {
+  const animatedRowCount = await page.evaluate(() =>
+    new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          resolve(document.querySelectorAll(".session-tab-row.is-reorder-animating").length);
+        });
+      });
+    }),
+  );
+  expect(animatedRowCount).toBeGreaterThan(0);
+  await expect(page.locator(".session-tab-row.is-reorder-animating")).toHaveCount(0);
+}
+
+async function dragSessionTab(page, sourceIndex, targetIndex, placement = "after") {
+  const rows = page.locator(".session-tab-row");
+  await rows.nth(sourceIndex).locator(".session-tab-button").hover();
+  await expect(page.locator(".adaptive-tooltip")).toBeVisible();
+
+  const sourceBox = await rows.nth(sourceIndex).boundingBox();
+  const targetBox = await rows.nth(targetIndex).boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error("Could not measure session tabs for drag reorder.");
+  }
+
+  const targetY =
+    placement === "before"
+      ? targetBox.y + targetBox.height * 0.25
+      : targetBox.y + targetBox.height * 0.75;
+
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".adaptive-tooltip")).toHaveCount(0);
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetY,
+    { steps: 8 },
+  );
+  await expectSessionTabReorderAnimation(page);
+  await page.mouse.up();
+}
+
+async function moveSessionToTrash(page, tabIndex) {
+  await page.locator(".session-tab-row").nth(tabIndex).hover();
+  await page.locator(".session-delete-button").nth(tabIndex).click();
+  const moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await moveConfirmDialog.getByRole("button", { name: /Yes, move .* to trash/ })
+    .click();
+  await expect(moveConfirmDialog).toHaveCount(0);
+}
+
 async function expectNewSessionButtonBelowLastTab(page) {
   await expect(page.locator(".session-tab-row.is-entering")).toHaveCount(0);
 
@@ -1630,13 +1767,100 @@ test("creates and switches note sessions from the sidebar", async ({ page }) => 
   await page.keyboard.press(modifierOptionShortcut("ArrowLeft"));
   await expect(page.getByRole("tab").nth(2)).toHaveAttribute("aria-selected", "true");
 
-  await page.keyboard.press(modifierShortcut("W"));
-  await expect(page.getByRole("tab")).toHaveCount(2);
-  await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press(modifierShortcut("Enter"));
+  await expectEditorFocused(page);
+});
+
+test("reorders session tabs with drag-and-drop and keyboard animation", async ({ page }) => {
+  await page.keyboard.press(modifierShortcut("T"));
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(page.locator(".session-tab-row.is-entering")).toHaveCount(0);
+
+  const initialOrder = await getSessionTabNoteIds(page);
+  const activeNoteId = initialOrder[2];
+  expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
+
+  await page.keyboard.press(modifierShortcut("Shift+ArrowLeft"));
+  await expectSessionTabReorderAnimation(page);
+  await expect.poll(() => getSessionTabNoteIds(page)).toEqual([
+    initialOrder[0],
+    initialOrder[2],
+    initialOrder[1],
+  ]);
+  expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
+
+  await page.keyboard.press(modifierShortcut("Shift+ArrowRight"));
+  await expectSessionTabReorderAnimation(page);
+  await expect.poll(() => getSessionTabNoteIds(page)).toEqual(initialOrder);
+  expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
+
+  await dragSessionTab(page, 0, 2);
+  await expect.poll(() => getSessionTabNoteIds(page)).toEqual([
+    initialOrder[1],
+    initialOrder[2],
+    initialOrder[0],
+  ]);
+  expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
+});
+
+test("keeps keyboard focus inside the editor during repeated Tab", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__outsideEditorFocusTargets = [];
+    document.addEventListener(
+      "focusin",
+      (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+        if (!target.closest("[data-testid='sticky-editor-surface']")) {
+          window.__outsideEditorFocusTargets.push(
+            target.getAttribute("aria-label") ||
+              target.getAttribute("data-testid") ||
+              target.className ||
+              target.tagName,
+          );
+        }
+      },
+      true,
+    );
+  });
+
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("- parent");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("- child");
+  await page.getByText("child", { exact: true }).click();
+  await expectEditorFocused(page);
+  await expect.poll(() => getBulletItemDepth(page, "child")).toBe(1);
+
+  await page.keyboard.press("Tab");
+  await expectEditorFocused(page);
+  await expect.poll(() => getBulletItemDepth(page, "child")).toBe(2);
+
+  await page.keyboard.press("Shift+Tab");
+  await expectEditorFocused(page);
+  await expect.poll(() => getBulletItemDepth(page, "child")).toBe(1);
+
+  await clickLastEmptyParagraph(page);
+  await expectEditorFocused(page);
+  for (let index = 0; index < 12; index += 1) {
+    await page.keyboard.press("Tab");
+    await expectEditorFocused(page);
+  }
+  await expect
+    .poll(() => page.evaluate(() => window.__outsideEditorFocusTargets))
+    .toEqual([]);
 });
 
 test("keeps the sidebar compact when creating a session", async ({ page }) => {
   const sidebar = page.getByTestId("session-sidebar");
+
+  await page.keyboard.press(modifierShortcut("Shift+B"));
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
+  await page.keyboard.press(modifierShortcut("Shift+B"));
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "expanded");
 
   await page.getByRole("button", { name: "Hide sidebar" }).click();
   await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
@@ -1689,7 +1913,92 @@ test("scrolls the sidebar when many session tabs exist", async ({ page }) => {
   expect(scrollMetrics.addButtonTop - scrollMetrics.lastTabBottom)
     .toBeGreaterThanOrEqual(0);
   expect(scrollMetrics.addButtonTop - scrollMetrics.lastTabBottom)
-    .toBeLessThanOrEqual(14);
+    .toBeLessThanOrEqual(16);
+});
+
+test("shows a blocking loading state while sticky windows are prepared", async ({ page }) => {
+  await page.addInitScript(() => {
+    const now = Date.now();
+    const notes = Array.from({ length: 6 }, (_, index) => ({
+      id: `mock-note-${index + 1}`,
+      title: `Mock note ${index + 1}`,
+      titleManuallyEdited: true,
+      blocksJSON: null,
+      markdown: "",
+      theme: {},
+      seedDemoContent: index === 0,
+      editorFontScale: 1,
+      editorFontFamily: "Inter",
+      detached: false,
+      trashedAt: null,
+      createdAt: now + index,
+      updatedAt: now + index,
+    }));
+    let layoutMode = "tabs";
+    let layoutModeChangedListener = null;
+    let layoutModeTransitionListener = null;
+
+    window.blocknoteSticky = {
+      getCurrentNoteId: async () => notes[0].id,
+      getNote: async (noteId) => notes.find((note) => note.id === noteId) ?? notes[0],
+      listNotes: async () => notes,
+      listTrash: async () => [],
+      getAppTheme: async () => ({ mode: "light" }),
+      getLayoutMode: async () => layoutMode,
+      getEditorPreferences: async () => ({}),
+      listFonts: async () => [],
+      saveContent: async () => undefined,
+      updateAppearance: async () => undefined,
+      updateLayoutMode: async (nextLayoutMode) =>
+        new Promise((resolve) => {
+          const previousLayoutMode = layoutMode;
+          layoutMode = nextLayoutMode;
+          layoutModeTransitionListener?.({
+            phase: "start",
+            sourceMode: previousLayoutMode,
+            targetMode: nextLayoutMode,
+            noteCount: notes.length,
+          });
+          window.__resolveLayoutModeUpdate = () => {
+            layoutModeChangedListener?.(nextLayoutMode);
+            layoutModeTransitionListener?.({
+              phase: "finish",
+              sourceMode: previousLayoutMode,
+              targetMode: nextLayoutMode,
+              noteCount: notes.length,
+            });
+            resolve(nextLayoutMode);
+          };
+        }),
+      onLayoutModeChanged: (callback) => {
+        layoutModeChangedListener = callback;
+        return () => {
+          layoutModeChangedListener = null;
+        };
+      },
+      onLayoutModeTransition: (callback) => {
+        layoutModeTransitionListener = callback;
+        return () => {
+          layoutModeTransitionListener = null;
+        };
+      },
+    };
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
+    .toBeVisible();
+
+  await page.getByTestId("session-sidebar-footer")
+    .getByRole("button", { name: "Switch to Sticky windows mode" })
+    .click();
+
+  const overlay = page.getByTestId("layout-transition-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toContainText("Opening sticky windows");
+  await expect(overlay).toContainText("Preparing 6 sticky windows...");
+
+  await page.evaluate(() => window.__resolveLayoutModeUpdate());
+  await expect(overlay).toHaveCount(0);
 });
 
 test("resizes and collapses the sidebar from its right edge", async ({ page }) => {
@@ -1959,6 +2268,47 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
   expect(deleteButtonLeftGap).toBeLessThanOrEqual(4);
   await secondDeleteButton.click();
 
+  let moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await expect(moveConfirmDialog.getByText("Move session to Trash?")).toBeVisible();
+  await expect(moveConfirmDialog.getByText(/restore it from Trash or undo immediately/))
+    .toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(moveConfirmDialog).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  await secondDeleteButton.click();
+  moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await page.locator(".trash-confirm-backdrop").click({ position: { x: 8, y: 8 } });
+  await expect(moveConfirmDialog).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  await secondDeleteButton.click();
+  moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  const undoToast = page.locator(".sticky-toast-success");
+  await expect(undoToast).toContainText("Untitled moved to Trash.");
+  await expect(undoToast.getByRole("button", { name: "Undo" })).toBeVisible();
+  await undoToast.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+
+  await page.getByRole("tab").nth(1).hover();
+  await page.locator(".session-delete-button").nth(1).click();
+  moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await moveConfirmDialog.getByRole("button", { name: /Yes, move Untitled to trash/ })
+    .click();
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expect(page.locator(".session-delete-button").first()).toBeDisabled();
   await expect(page.locator(".session-index-label").first()).toHaveCSS("opacity", "1");
@@ -1971,10 +2321,15 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
   const trashList = preferencesPanel.getByRole("list", { name: "Trash notes" });
   const trashRow = trashList.getByRole("listitem").filter({ hasText: "Untitled" });
   await expect(trashRow).toBeVisible();
+  await expect(trashRow.getByRole("button", { name: "Restore Untitled" })).toHaveCount(0);
+  await expect(trashRow.getByRole("button", { name: "Delete permanently Untitled" }))
+    .toHaveCount(0);
   await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
     .toHaveCount(1);
 
-  await trashRow.getByRole("button", { name: "Restore Untitled" }).click();
+  await trashRow.click();
+  await expect(preferencesPanel.getByText("1 selected")).toBeVisible();
+  await preferencesPanel.getByRole("button", { name: "Restore 1 selected note" }).click();
   await expect(preferencesPanel.getByText("Trash is empty.")).toBeVisible();
   await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
     .toHaveCount(2);
@@ -1983,6 +2338,12 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
 
   await page.getByRole("tab").nth(1).hover();
   await page.locator(".session-delete-button").nth(1).click();
+  moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await moveConfirmDialog.getByRole("button", { name: /Yes, move Untitled to trash/ })
+    .click();
   await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
     .toHaveCount(1);
   await page.keyboard.press(modifierShortcut(","));
@@ -1992,7 +2353,15 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
     .getByRole("list", { name: "Trash notes" })
     .getByRole("listitem")
     .filter({ hasText: "Untitled" });
-  await reopenedTrashRow.getByRole("button", { name: "Delete permanently Untitled" }).click();
+  await expect(reopenedTrashRow.getByRole("button", { name: "Restore Untitled" }))
+    .toHaveCount(0);
+  await expect(reopenedTrashRow.getByRole("button", { name: "Delete permanently Untitled" }))
+    .toHaveCount(0);
+  await reopenedTrashRow.click();
+  await expect(reopenedPreferencesPanel.getByText("1 selected")).toBeVisible();
+  await reopenedPreferencesPanel.getByRole("button", {
+    name: "Delete permanently 1 selected note",
+  }).click();
   const confirmDialog = reopenedPreferencesPanel.getByRole("dialog", {
     name: "Delete permanently confirmation",
   });
@@ -2002,13 +2371,117 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
   await confirmDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(confirmDialog).toHaveCount(0);
   await expect(reopenedTrashRow).toBeVisible();
+  await expect(reopenedPreferencesPanel.getByText("1 selected")).toBeVisible();
 
-  await reopenedTrashRow.getByRole("button", { name: "Delete permanently Untitled" }).click();
+  await reopenedPreferencesPanel.getByRole("button", {
+    name: "Delete permanently 1 selected note",
+  }).click();
   await reopenedPreferencesPanel
     .getByRole("button", { name: /Yes, permanently delete Untitled/ })
     .click();
   await expect(reopenedPreferencesPanel.getByText("Trash is empty.")).toBeVisible();
   await expect(reopenedTrashRow).toHaveCount(0);
+});
+
+test("selects trash notes for bulk restore and permanent delete", async ({ page }) => {
+  await page.getByRole("button", { name: "New session" }).click();
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(3);
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Trash preview target");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Second preview line");
+  await expect(page.getByTestId("sticky-editor-surface").getByText("Second preview line"))
+    .toBeVisible();
+
+  await moveSessionToTrash(page, 2);
+  await moveSessionToTrash(page, 1);
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(1);
+
+  await page.keyboard.press(modifierShortcut(","));
+  const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(preferencesPanel).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Trash" }).click();
+  const trashList = preferencesPanel.getByRole("list", { name: "Trash notes" });
+  await expect(trashList.getByRole("listitem")).toHaveCount(2);
+  await expect(trashList.getByRole("button", { name: /Restore Untitled/ })).toHaveCount(0);
+  await expect(trashList.getByRole("button", { name: /Delete permanently Untitled/ }))
+    .toHaveCount(0);
+  const previewTrashRow = trashList.getByRole("listitem").filter({
+    hasText: "Trash preview target",
+  });
+  await expect(previewTrashRow).toBeVisible();
+  await expect(preferencesPanel.getByText("0 selected")).toBeVisible();
+  await previewTrashRow.getByRole("button", { name: /Preview/ }).click();
+  await expect(preferencesPanel.getByText("0 selected")).toBeVisible();
+  await expect(previewTrashRow.getByRole("checkbox")).not.toBeChecked();
+  const previewDialog = preferencesPanel.getByRole("dialog", {
+    name: "Trash note preview",
+  });
+  await expect(previewDialog).toBeVisible();
+  const previewContent = previewDialog.locator(".trash-preview-content");
+  await expect(previewContent.getByText("Trash preview target")).toBeVisible();
+  await expect(previewContent.getByText("Second preview line")).toBeVisible();
+  await expect(previewContent).toHaveCSS("overflow-y", "auto");
+  await previewDialog.getByRole("button", { name: "Close preview" }).click();
+  await expect(previewDialog).toHaveCount(0);
+
+  const firstTrashCheckbox = trashList.getByRole("checkbox").first();
+  await trashList.getByRole("listitem").first().click();
+  await expect(firstTrashCheckbox).toBeChecked();
+  await expect(preferencesPanel.getByText("1 selected")).toBeVisible();
+  await expect(preferencesPanel.getByRole("checkbox", { name: "Select all trash notes" }))
+    .toHaveJSProperty("indeterminate", true);
+
+  await preferencesPanel.getByRole("checkbox", { name: "Select all trash notes" }).check();
+  await expect(preferencesPanel.getByText("2 selected")).toBeVisible();
+  await preferencesPanel.getByRole("button", { name: "Restore 2 selected notes" }).click();
+  await expect(preferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
+    .toHaveCount(3);
+  await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+  await expect(preferencesPanel).toHaveCount(0);
+
+  await moveSessionToTrash(page, 2);
+  await moveSessionToTrash(page, 1);
+  await page.keyboard.press(modifierShortcut(","));
+  const reopenedPreferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
+  await expect(reopenedPreferencesPanel).toBeVisible();
+  await reopenedPreferencesPanel.getByRole("tab", { name: "Trash" }).click();
+  const reopenedTrashList = reopenedPreferencesPanel.getByRole("list", {
+    name: "Trash notes",
+  });
+  await expect(reopenedTrashList.getByRole("listitem")).toHaveCount(2);
+
+  await reopenedPreferencesPanel.getByRole("checkbox", {
+    name: "Select all trash notes",
+  }).check();
+  await expect(reopenedPreferencesPanel.getByText("2 selected")).toBeVisible();
+  await reopenedPreferencesPanel.getByRole("button", {
+    name: "Delete permanently 2 selected notes",
+  }).click();
+  const confirmDialog = reopenedPreferencesPanel.getByRole("dialog", {
+    name: "Delete permanently confirmation",
+  });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog.getByText("Delete selected permanently?")).toBeVisible();
+  await expect(confirmDialog.getByText("These notes cannot be recovered after deletion."))
+    .toBeVisible();
+  await expect(confirmDialog.getByText("2 selected notes")).toBeVisible();
+  await confirmDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(reopenedPreferencesPanel.getByText("2 selected")).toBeVisible();
+
+  await reopenedPreferencesPanel.getByRole("button", {
+    name: "Delete permanently 2 selected notes",
+  }).click();
+  await reopenedPreferencesPanel.getByRole("button", {
+    name: "Yes, permanently delete 2 selected notes",
+  }).click();
+  await expect(reopenedPreferencesPanel.getByText("Trash is empty.")).toBeVisible();
+  await expect(reopenedTrashList.getByRole("listitem")).toHaveCount(0);
 });
 
 test("moves the current sticky note to trash from the sticky header", async ({ page }) => {
@@ -2362,6 +2835,32 @@ async function clickLastEmptyParagraph(page) {
   const emptyParagraphs = page.getByRole("paragraph").filter({ hasText: /^$/ });
   await emptyParagraphs.last().scrollIntoViewIfNeeded();
   await emptyParagraphs.last().click();
+}
+
+async function expectEditorFocused(page) {
+  await expect.poll(async () =>
+    await page.evaluate(() => {
+      const activeElement = document.activeElement;
+      return Boolean(activeElement?.closest?.(".bn-editor"));
+    }),
+  ).toBe(true);
+}
+
+async function getBulletItemDepth(page, text) {
+  return await page.evaluate((targetText) => {
+    const content = [...document.querySelectorAll("[data-content-type='bulletListItem']")]
+      .find((element) => element.textContent?.trim() === targetText);
+    const outer = content?.closest(".bn-block-outer");
+    let depth = 0;
+    let current = outer?.parentElement;
+    while (current) {
+      if (current.classList?.contains("bn-block-group")) {
+        depth += 1;
+      }
+      current = current.parentElement;
+    }
+    return depth;
+  }, text);
 }
 
 async function pastePlainText(page, text) {

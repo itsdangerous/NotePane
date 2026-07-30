@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
   listNotes: () => ipcRenderer.invoke("notes:list"),
   listTrash: () => ipcRenderer.invoke("trash:list"),
   createNote: () => ipcRenderer.invoke("notes:create"),
+  reorderNotes: (noteIds) => ipcRenderer.invoke("notes:reorder", noteIds),
   deleteNote: (noteId) => ipcRenderer.invoke("notes:delete", noteId),
   restoreNote: (noteId) => ipcRenderer.invoke("trash:restore", noteId),
   purgeNote: (noteId) => ipcRenderer.invoke("trash:purge", noteId),
@@ -43,6 +44,11 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
     const listener = (_event, layoutMode) => callback(layoutMode);
     ipcRenderer.on("layout-mode:changed", listener);
     return () => ipcRenderer.removeListener("layout-mode:changed", listener);
+  },
+  onLayoutModeTransition: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("layout-mode:transition", listener);
+    return () => ipcRenderer.removeListener("layout-mode:transition", listener);
   },
   onEditorPreferencesChanged: (callback) => {
     const listener = (_event, editorPreferences) => callback(editorPreferences);

@@ -82,7 +82,7 @@ test("Electron app opens a sticky window and persists editor content", async () 
   }
 });
 
-test("Electron menu actions respect tabs/sticky modes and toggle always-on-top", async () => {
+test("Electron keeps keyboard focus inside the editor during repeated Tab", async () => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "notepane-electron-"),
   );
@@ -90,6 +90,124 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
 
   try {
     const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await page.bringToFront();
+    await clickLastEmptyParagraph(page);
+    await expectEditorFocused(page);
+    await page.evaluate(() => {
+      window.__outsideEditorFocusTargets = [];
+      document.addEventListener(
+        "focusin",
+        (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) {
+            return;
+          }
+          if (!target.closest("[data-testid='sticky-editor-surface']")) {
+            window.__outsideEditorFocusTargets.push(
+              target.getAttribute("aria-label") ||
+                target.getAttribute("data-testid") ||
+                target.className ||
+                target.tagName,
+            );
+          }
+        },
+        true,
+      );
+    });
+
+    for (let index = 0; index < 12; index += 1) {
+      await page.keyboard.press("Tab");
+      await expectEditorFocused(page);
+    }
+    await expect
+      .poll(() => page.evaluate(() => window.__outsideEditorFocusTargets))
+      .toEqual([]);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron keeps sticky windows bound to their original sessions during new-note commands", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "first-note",
+      title: "First note",
+      markdown: "first sticky body",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "second-note",
+      title: "Second note",
+      markdown: "second sticky body",
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]);
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    const firstStickyPage = await getStickyPageByNoteId(electronApp, "first-note");
+    const secondStickyPage = await getStickyPageByNoteId(electronApp, "second-note");
+    await expect(firstStickyPage.getByTestId("sticky-editor-surface"))
+      .toContainText("first sticky body");
+    await expect(secondStickyPage.getByTestId("sticky-editor-surface"))
+      .toContainText("second sticky body");
+
+    await firstStickyPage.bringToFront();
+    await expect.poll(() => getCurrentPageNoteId(firstStickyPage)).toBe("first-note");
+    await firstStickyPage.keyboard.press(modifierShortcut("N"));
+    await expect.poll(() => getCurrentPageNoteId(firstStickyPage)).toBe("first-note");
+    await expect(firstStickyPage.getByTestId("sticky-editor-surface"))
+      .toContainText("first sticky body");
+
+    await clickMenuItem(electronApp, "New Note");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(3);
+    await expect.poll(() => getCurrentPageNoteId(firstStickyPage)).toBe("first-note");
+
+    const attemptedActivation = await firstStickyPage.evaluate(async () => {
+      const note = await window.blocknoteSticky.activateNote("second-note");
+      return {
+        returnedNoteId: note?.id ?? null,
+        currentNoteId: await window.blocknoteSticky.getCurrentNoteId(),
+      };
+    });
+    expect(attemptedActivation).toEqual({
+      returnedNoteId: "first-note",
+      currentNoteId: "first-note",
+    });
+    await expect(firstStickyPage.getByTestId("sticky-editor-surface"))
+      .toContainText("first sticky body");
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron menu actions respect tabs/sticky modes and toggle always-on-top", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    let page = await electronApp.firstWindow();
     await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
       .toBeVisible();
@@ -108,13 +226,34 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
     }).toBe(1);
     await expect(page.getByRole("tab")).toHaveCount(2);
 
-    await clickMenuItem(electronApp, "Close Tab / Window");
+    await clickMenuItem(electronApp, "Close Window");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(0);
+    await expect.poll(() => {
+      const state = getStoredTrashState(userDataDirectory);
+      return {
+        activeCount: state.activeNoteIds.length,
+        trashedCount: state.trashedNoteIds.length,
+      };
+    }).toEqual({
+      activeCount: 2,
+      trashedCount: 0,
+    });
+
+    await electronApp.evaluate(({ app }) => {
+      app.emit("activate");
+    });
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().length;
       });
     }).toBe(1);
-    await expect(page.getByRole("tab")).toHaveCount(1);
+    page = getOpenPages(electronApp)[0] ?? await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(2);
 
     await clickMenuItem(electronApp, "New Note");
     await expect.poll(async () => {
@@ -122,14 +261,14 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
         return BrowserWindow.getAllWindows().length;
       });
     }).toBe(1);
-    await expect(page.getByRole("tab")).toHaveCount(2);
+    await expect(page.getByRole("tab")).toHaveCount(3);
 
     await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().length;
       });
-    }).toBe(2);
+    }).toBe(3);
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().map((window) => window.getBounds());
@@ -140,8 +279,26 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
           width: 420,
           height: 340,
         }),
-      ]),
-    );
+        ]),
+      );
+
+    const focusedStickyWindowId = await electronApp.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().at(-1);
+      window?.focus();
+      return window?.id ?? null;
+    });
+    const focusedStickyPage = getOpenPages(electronApp).at(-1);
+    await focusedStickyPage.keyboard.press(modifierShortcut("N"));
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(3);
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getFocusedWindow()?.id ?? null;
+      });
+    }).toBe(focusedStickyWindowId);
 
     await electronApp.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows().at(-1)?.close();
@@ -150,21 +307,21 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().length;
       });
-    }).toBe(1);
+    }).toBe(2);
 
     await electronApp.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows().at(-1)?.focus();
     });
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop();
+        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
       });
     }).toBe(false);
 
     await clickMenuItem(electronApp, "Toggle Always On Top");
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getAllWindows()[0]?.isAlwaysOnTop();
+        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
       });
     }).toBe(true);
   } finally {
@@ -752,8 +909,8 @@ function writeInitialNotes(userDataDirectory, notes) {
         notes: notes.map((note, index) => ({
           id: note.id,
           title: note.title,
-          blocksJSON: null,
-          markdown: "",
+          blocksJSON: note.blocksJSON ?? null,
+          markdown: note.markdown ?? "",
           bounds: {
             x: 80 + index * 24,
             y: 80 + index * 24,
@@ -761,6 +918,7 @@ function writeInitialNotes(userDataDirectory, notes) {
             height: 720,
           },
           theme: note.theme,
+          seedDemoContent: Boolean(note.seedDemoContent),
           alwaysOnTop: false,
           detached: false,
           createdAt: note.createdAt,
@@ -817,6 +975,27 @@ async function openStickySettings(page) {
   const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
   await expect(settingsPanel).toBeVisible();
   return settingsPanel;
+}
+
+async function clickLastEmptyParagraph(page) {
+  const emptyParagraphs = page.getByRole("paragraph").filter({ hasText: /^$/ });
+  await emptyParagraphs.last().scrollIntoViewIfNeeded();
+  await emptyParagraphs.last().click();
+}
+
+async function expectEditorFocused(page) {
+  await expect.poll(async () =>
+    await page.evaluate(() => {
+      const activeElement = document.activeElement;
+      return Boolean(activeElement?.closest?.(".bn-editor"));
+    }),
+  ).toBe(true);
+}
+
+async function getCurrentPageNoteId(page) {
+  return await page.evaluate(async () => {
+    return await window.blocknoteSticky.getCurrentNoteId();
+  });
 }
 
 async function getPageNoteId(page) {

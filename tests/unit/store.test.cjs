@@ -3,7 +3,10 @@ const os = require("os");
 const path = require("path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { StickyStore } = require("../../electron/store.cjs");
+const {
+  StickyStore,
+  DEFAULT_KEYBOARD_SHORTCUTS,
+} = require("../../electron/store.cjs");
 
 test("creates, saves, and reloads a local note", () => {
   const directory = createTemporaryDirectory();
@@ -94,6 +97,40 @@ test("marks only explicitly seeded notes for demo content", () => {
   });
 
   assert.equal(store.getNote(initialNote.id).seedDemoContent, false);
+});
+
+test("reorders notes without changing creation timestamps", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+  const firstNote = store.createNote({ width: 900, height: 700 });
+  const secondNote = store.createNote({ width: 900, height: 700 });
+  const thirdNote = store.createNote({ width: 900, height: 700 });
+
+  const originalCreatedAt = new Map(
+    store.listNotes().map((note) => [note.id, note.createdAt]),
+  );
+  const reordered = store.reorderNotes([
+    thirdNote.id,
+    firstNote.id,
+    secondNote.id,
+  ]);
+
+  assert.deepEqual(reordered.notes.map((note) => note.id), [
+    thirdNote.id,
+    firstNote.id,
+    secondNote.id,
+  ]);
+  assert.deepEqual(new StickyStore(directory).listNotes().map((note) => note.id), [
+    thirdNote.id,
+    firstNote.id,
+    secondNote.id,
+  ]);
+  assert.deepEqual(
+    new StickyStore(directory).listNotes().map((note) => note.createdAt),
+    [thirdNote.id, firstNote.id, secondNote.id].map((noteId) =>
+      originalCreatedAt.get(noteId),
+    ),
+  );
 });
 
 test("normalizes invalid blocks JSON and clamps window bounds", () => {
@@ -262,16 +299,25 @@ test("updates editor preferences and applies them to new notes", () => {
     editorFontScale: 1,
     editorFontFamily: "system",
     showTableOfContents: false,
+    keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
   });
+
+  const keyboardShortcuts = {
+    ...DEFAULT_KEYBOARD_SHORTCUTS,
+    focusEditor: "Mod+Shift+F",
+    toggleSidebar: "Mod+Shift+B",
+  };
 
   assert.deepEqual(store.updateEditorPreferences({
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
     showTableOfContents: true,
+    keyboardShortcuts,
   }), {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
     showTableOfContents: true,
+    keyboardShortcuts,
   });
 
   const note = store.createNote({ width: 900, height: 700 });
@@ -283,7 +329,62 @@ test("updates editor preferences and applies them to new notes", () => {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
     showTableOfContents: true,
+    keyboardShortcuts,
   });
+});
+
+test("migrates legacy default sidebar shortcut away from Mod+B", () => {
+  const legacyDirectory = createTemporaryDirectory();
+  fs.mkdirSync(legacyDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(legacyDirectory, "notes.json"),
+    JSON.stringify({
+      version: 7,
+      editorPreferences: {
+        editorFontScale: 1,
+        editorFontFamily: "system",
+        showTableOfContents: false,
+        keyboardShortcuts: {
+          ...DEFAULT_KEYBOARD_SHORTCUTS,
+          focusEditor: "Mod+Shift+F",
+          toggleSidebar: "Mod+B",
+        },
+      },
+      notes: [],
+    }),
+    "utf8",
+  );
+
+  const legacyStore = new StickyStore(legacyDirectory);
+  const legacyShortcuts = legacyStore.getEditorPreferences().keyboardShortcuts;
+  assert.equal(legacyShortcuts.focusEditor, "Mod+Shift+F");
+  assert.equal(legacyShortcuts.toggleSidebar, "Mod+Shift+B");
+
+  const currentDirectory = createTemporaryDirectory();
+  fs.mkdirSync(currentDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(currentDirectory, "notes.json"),
+    JSON.stringify({
+      version: 8,
+      editorPreferences: {
+        editorFontScale: 1,
+        editorFontFamily: "system",
+        showTableOfContents: false,
+        keyboardShortcuts: {
+          ...DEFAULT_KEYBOARD_SHORTCUTS,
+          toggleSidebar: "Mod+B",
+        },
+      },
+      notes: [],
+    }),
+    "utf8",
+  );
+
+  const currentStore = new StickyStore(currentDirectory);
+  assert.equal(
+    currentStore.getEditorPreferences().keyboardShortcuts.toggleSidebar,
+    "Mod+B",
+  );
 });
 
 test("migrates legacy always-on-top default to false", () => {

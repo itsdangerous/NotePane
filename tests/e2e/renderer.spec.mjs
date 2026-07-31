@@ -2,11 +2,10 @@ import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
-    .toBeVisible();
+  await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
 });
 
-test("renders the demo block set", async ({ page }) => {
+test("starts with a blank first session", async ({ page }) => {
   await expect(page.getByTestId("sticky-shell")).toBeVisible();
   await expect(page.getByTestId("sticky-header")).toBeVisible();
   await expect(page.locator("[aria-label='NotePane wordmark']")).toBeVisible();
@@ -15,15 +14,28 @@ test("renders the demo block set", async ({ page }) => {
   await expect(page.locator(".sticky-header [aria-label='NotePane wordmark']"))
     .toHaveCount(0);
   await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Heading", exact: true }))
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(page.getByRole("tab").first()).toHaveAccessibleName(/Untitled/);
+  await expect(page.getByRole("table")).toHaveCount(0);
+});
+
+test("renders the NotePane template when requested", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
     .toBeVisible();
-  await expect(page.getByRole("heading", { name: "Toggle Heading", exact: true }))
+  await expect(page.getByText("A focused workspace for persistent notes"))
     .toBeVisible();
-  await expect(page.getByText("Check List Item")).toBeVisible();
-  await expect(page.getByText("console.log('Hello, world!');")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Launch checklist" }))
+    .toBeVisible();
+  await expect(page.getByText("Create one session per meeting"))
+    .toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
-  await expect(page.getByText("Add file")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Link" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Tabs" })).toBeVisible();
+  await expect(page.getByText("Styled Text")).toBeVisible();
+  await expect(page.getByTestId("sticky-editor-surface"))
+    .toHaveClass(/is-template-session/);
 });
 
 test("keeps sticky chrome outside the editable BlockNote surface", async ({ page }) => {
@@ -279,6 +291,27 @@ test("changes editor typography globally from preferences", async ({ page }) => 
   await expect(preferencesPanel).toBeVisible();
   await expect(preferencesPanel.getByRole("tab", { name: "General" }))
     .toHaveAttribute("aria-selected", "true");
+  const appThemeLabelGap = await preferencesPanel
+    .locator(".preference-setting-row")
+    .first()
+    .evaluate((row) => {
+      const title = row.querySelector(".preference-setting-title");
+      const description = row.querySelector(".preferences-section-description");
+      const titleRect = title.getBoundingClientRect();
+      const descriptionRect = description.getBoundingClientRect();
+      return Math.round(descriptionRect.top - titleRect.bottom);
+    });
+  expect(appThemeLabelGap).toBeGreaterThanOrEqual(3);
+  const appFontRow = preferencesPanel.locator(".app-font-family-setting");
+  await expect(appFontRow.getByText("App font")).toBeVisible();
+  await expect(appFontRow.getByLabel("App font family")).toHaveValue("Inter");
+  await appFontRow.getByLabel("App font family").fill("avenir");
+  await expect(page.getByRole("listbox", { name: "App font family options" }))
+    .toBeVisible();
+  await expectFloatingTypographyMenu(page, "App font family options", {
+    maxWidth: 238,
+  });
+  await page.getByRole("option", { name: "Avenir" }).click();
   await expect(page.locator("#preferences-editor")).toHaveCount(0);
   await preferencesPanel.getByRole("tab", { name: "Editor" }).click();
   await expect(preferencesPanel.getByRole("tab", { name: "Editor" }))
@@ -318,6 +351,8 @@ test("changes editor typography globally from preferences", async ({ page }) => 
   await page.getByRole("button", { name: "Close preferences" }).click();
 
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
+    appFontFamily: expect.stringContaining("Avenir"),
+    sidebarFontFamily: expect.stringContaining("Avenir"),
     editorFontScale: "1.5",
     editorFontFamily: expect.stringContaining("Garamond"),
     shellFontSize: before.shellFontSize,
@@ -329,6 +364,8 @@ test("changes editor typography globally from preferences", async ({ page }) => 
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
+    appFontFamily: expect.stringContaining("Avenir"),
+    sidebarFontFamily: expect.stringContaining("Avenir"),
     editorFontScale: "1.5",
     editorFontFamily: expect.stringContaining("Garamond"),
     shellFontSize: before.shellFontSize,
@@ -339,12 +376,14 @@ test("changes editor typography globally from preferences", async ({ page }) => 
   await page.getByRole("tab").first().click();
   await expect(page.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
+    appFontFamily: expect.stringContaining("Avenir"),
     editorFontScale: "1.5",
     editorFontFamily: expect.stringContaining("Garamond"),
   });
 });
 
 test("shows table of contents in tab mode only when enabled from preferences", async ({ page }) => {
+  await loadTemplatePreview(page);
   await expect(page.getByTestId("editor-toc")).toHaveCount(0);
 
   await page.keyboard.press(modifierShortcut(","));
@@ -399,10 +438,10 @@ test("shows table of contents in tab mode only when enabled from preferences", a
   expect(tocMetrics.listOverflowY).toBe("auto");
   expect(tocMetrics.listScrollWidth).toBeLessThanOrEqual(tocMetrics.listClientWidth);
   await expect(tableOfContents.getByRole("button", {
-    name: /Jump to Welcome to BlockNote!, heading level 1/,
+    name: /Jump to NotePane, heading level 1/,
   })).toBeVisible();
   await expect(tableOfContents.getByRole("button", {
-    name: /Jump to Toggle Heading, heading level 1/,
+    name: /Jump to Launch checklist, heading level 1/,
   })).toBeVisible();
 
   await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
@@ -434,6 +473,7 @@ test("keeps tab and command select-all outside the editor from moving chrome foc
   expect(chromeSelection).toBe("");
 
   await clickLastEmptyParagraph(page);
+  await page.keyboard.type("select all target");
   await expect(page.getByRole("group", { name: "Editor typography" }))
     .toHaveCount(0);
   await page.keyboard.press(modifierShortcut("A"));
@@ -689,16 +729,48 @@ test("customizes keyboard shortcuts from preferences", async ({ page }) => {
   await expect(preferencesPanel).toBeVisible();
   await preferencesPanel.getByRole("tab", { name: "Shortcuts" }).click();
 
+  const moveTabLeftShortcut = preferencesPanel.getByRole("button", {
+    name: "Shortcut for Move tab left",
+  });
+  const moveTabRightShortcut = preferencesPanel.getByRole("button", {
+    name: "Shortcut for Move tab right",
+  });
+  await expect(moveTabLeftShortcut).toContainText("[");
+  await expect(moveTabLeftShortcut).toContainText(/Shift|⇧/);
+  await expect(moveTabRightShortcut).toContainText("]");
+  await expect(moveTabRightShortcut).toContainText(/Shift|⇧/);
+  await expect(preferencesPanel.getByRole("switch", {
+    name: "Enable Open tab by number shortcut",
+  })).toHaveAttribute("aria-checked", "true");
+
   const toggleSidebarShortcut = preferencesPanel.getByRole("button", {
     name: "Shortcut for Toggle sidebar",
   });
+  const toggleSidebarSwitch = preferencesPanel.getByRole("switch", {
+    name: "Enable Toggle sidebar shortcut",
+  });
+  await expect(toggleSidebarSwitch).toHaveAttribute("aria-checked", "true");
   await expect(toggleSidebarShortcut).toContainText("B");
   await expect(toggleSidebarShortcut).toContainText(/Shift|⇧/);
   await toggleSidebarShortcut.click();
   await expect(toggleSidebarShortcut).toHaveText("Recording");
   await page.keyboard.press(modifierShortcut("Shift+Y"));
   await expect(toggleSidebarShortcut).toContainText("Y");
+  await toggleSidebarSwitch.click();
+  await expect(toggleSidebarSwitch).toHaveAttribute("aria-checked", "false");
 
+  await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
+  await expect(preferencesPanel).toHaveCount(0);
+
+  await page.keyboard.press(modifierShortcut("Shift+Y"));
+  await expect(sidebar).toHaveAttribute("data-sidebar-state", "expanded");
+
+  await page.keyboard.press(modifierShortcut(","));
+  await expect(preferencesPanel).toBeVisible();
+  await preferencesPanel.getByRole("tab", { name: "Shortcuts" }).click();
+  await preferencesPanel.getByRole("switch", {
+    name: "Enable Toggle sidebar shortcut",
+  }).click();
   await preferencesPanel.getByRole("button", { name: "Close preferences" }).click();
   await expect(preferencesPanel).toHaveCount(0);
 
@@ -994,6 +1066,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
 });
 
 test("keeps sticky editor chrome readable against dark custom backgrounds", async ({ page }) => {
+  await loadTemplatePreview(page);
   await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
@@ -1013,6 +1086,10 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
     headerIsOpaque: true,
     editorTextContrastIsReadable: true,
     codeTextContrastIsReadable: true,
+    codeTokenContrastIsReadable: true,
+    codeBackgroundIsDark: true,
+    codeBlockClipsRoundedBackground: true,
+    codeSyntaxHighlightingIsPreserved: true,
     tableBorderContrastIsReadable: true,
     settingsButtonContrastIsReadable: true,
   });
@@ -1024,6 +1101,10 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
     headerIsOpaque: true,
     editorTextContrastIsReadable: true,
     codeTextContrastIsReadable: true,
+    codeTokenContrastIsReadable: true,
+    codeBackgroundIsDark: true,
+    codeBlockClipsRoundedBackground: true,
+    codeSyntaxHighlightingIsPreserved: true,
     tableBorderContrastIsReadable: true,
     settingsButtonContrastIsReadable: true,
   });
@@ -1043,6 +1124,11 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
   });
   await expect.poll(() => getStickyContrastSnapshot(page)).toMatchObject({
     textColor: "#f7f7f4",
+    codeTextContrastIsReadable: true,
+    codeTokenContrastIsReadable: true,
+    codeBackgroundIsDark: true,
+    codeBlockClipsRoundedBackground: true,
+    codeSyntaxHighlightingIsPreserved: true,
     tableBorderContrastIsReadable: true,
     settingsButtonContrastIsReadable: true,
   });
@@ -1053,7 +1139,7 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
 
 async function expectStickyTableChromeReadable(page) {
   await page.getByRole("table").hover();
-  const lastCell = page.getByRole("cell", { name: "Table Cell" }).last();
+  const lastCell = page.getByRole("cell", { name: "Export PDF" }).last();
   await lastCell.hover();
   await lastCell.click();
   await lastCell.hover();
@@ -1374,12 +1460,24 @@ async function getStickyContrastSnapshot(page) {
     const header = document.querySelector("[data-testid='sticky-header']");
     const settingsButton = document.querySelector(".sticky-settings-button");
     const editor = document.querySelector(".bn-editor");
-    const code = document.querySelector(".bn-editor code");
-    const tableCell = document.querySelector(".bn-editor td, .bn-editor th, .bn-editor .bn-table-cell");
+    const codeBlock = document.querySelector(
+      ".bn-editor [data-content-type='codeBlock']",
+    );
+    const codeBlockPre = codeBlock?.querySelector("pre");
+    const code =
+      codeBlock?.querySelector("code") ?? document.querySelector(".bn-editor code");
+    const tableCell = document.querySelector(
+      ".bn-editor td, .bn-editor th, .bn-editor .bn-table-cell",
+    );
+    const codeBlockStyle = codeBlock ? getComputedStyle(codeBlock) : null;
+    const codeBlockPreStyle = codeBlockPre ? getComputedStyle(codeBlockPre) : null;
     const codeStyle = code ? getComputedStyle(code) : null;
     const tableCellStyle = tableCell ? getComputedStyle(tableCell) : null;
     const parseColor = (color) => {
       const normalizedColor = color.trim();
+      if (normalizedColor === "transparent") {
+        return { r: 0, g: 0, b: 0, a: 0 };
+      }
       if (/^#[0-9a-f]{6}$/i.test(normalizedColor)) {
         return {
           r: Number.parseInt(normalizedColor.slice(1, 3), 16),
@@ -1427,7 +1525,47 @@ async function getStickyContrastSnapshot(page) {
     const shellBackground =
       shellStyle.getPropertyValue("--sticky-effective-bg").trim() ||
       shellStyle.backgroundColor;
-    const codeBackground = codeStyle?.backgroundColor ?? shellBackground;
+    const codeBackgroundColor = [
+      codeBlockStyle?.backgroundColor,
+      codeBlockPreStyle?.backgroundColor,
+      codeStyle?.backgroundColor,
+    ].find((backgroundColor) => backgroundColor && parseColor(backgroundColor).a > 0) ??
+      shellBackground;
+    const codeBackground = compositeColor(codeBackgroundColor, shellBackground);
+    const codeBlockRadius = Number.parseFloat(
+      codeBlockStyle?.borderTopLeftRadius ?? "0",
+    );
+    const codeBlockPreRadius = Number.parseFloat(
+      codeBlockPreStyle?.borderTopLeftRadius ?? "0",
+    );
+    const codeTextColor = codeStyle?.color ?? codeBlockStyle?.color ?? shellStyle.color;
+    const codeTokenElements = codeBlock
+      ? [
+          codeBlock,
+          ...codeBlock.querySelectorAll(
+            "pre, code, span, [style*='color'], [class*='token'], [class*='hljs'], [class*='cm-']",
+          ),
+        ].filter((element) => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return Boolean(
+            element.textContent?.trim() &&
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              rect.width > 0 &&
+              rect.height > 0,
+          );
+        })
+      : [];
+    const codeTokenContrasts = codeTokenElements.map((element) =>
+      contrastRatio(getComputedStyle(element).color, codeBackground),
+    );
+    const codeTokenContrastMin = codeTokenContrasts.length > 0
+      ? Math.min(...codeTokenContrasts)
+      : 0;
+    const codeTokenDistinctColorCount = new Set(
+      codeTokenElements.map((element) => getComputedStyle(element).color),
+    ).size;
     const tableBorderColor = tableCellStyle?.borderTopColor ?? shellStyle
       .getPropertyValue("--sticky-table-border-color");
     const visibleTableBorderColor = compositeColor(tableBorderColor, shellBackground);
@@ -1441,7 +1579,16 @@ async function getStickyContrastSnapshot(page) {
       editorTextContrastIsReadable:
         contrastRatio(getComputedStyle(editor).color, shellBackground) >= 4.5,
       codeTextContrastIsReadable:
-        contrastRatio(codeStyle?.color ?? shellStyle.color, codeBackground) >= 4.5,
+        contrastRatio(codeTextColor, codeBackground) >= 4.5,
+      codeBackgroundIsDark: luminance(codeBackground) <= 0.04,
+      codeBlockClipsRoundedBackground:
+        codeBlockStyle?.overflow === "hidden" &&
+        codeBlockRadius >= 8 &&
+        Math.abs(codeBlockRadius - codeBlockPreRadius) <= 1,
+      codeTokenContrastMin: Number(codeTokenContrastMin.toFixed(2)),
+      codeTokenContrastIsReadable: codeTokenContrastMin >= 4.5,
+      codeTokenDistinctColorCount,
+      codeSyntaxHighlightingIsPreserved: codeTokenDistinctColorCount >= 3,
       tableBorderColor,
       visibleTableBorderColor,
       tableBorderContrastIsReadable:
@@ -1691,6 +1838,7 @@ test("keeps adaptive tooltips visible from every viewport edge", async ({ page }
 });
 
 test("uses transparent chrome-free styles while exporting", async ({ page }) => {
+  await loadTemplatePreview(page);
   const exportStyles = await page.evaluate(() => {
     const surfaceElement = document.querySelector("[data-testid='sticky-editor-surface']");
     surfaceElement.querySelector(".bn-editor").style.paddingBottom = "780px";
@@ -1729,7 +1877,7 @@ test("uses transparent chrome-free styles while exporting", async ({ page }) => 
   expect(exportStyles.surfaceBackgroundImage).toBe("none");
   expect(exportStyles.surfaceBackgroundColor).toBe("rgba(0, 0, 0, 0)");
   expect(exportStyles.editorTextColor).toBe("rgb(55, 53, 47)");
-  expect(exportStyles.codeBackground).toBe("rgb(247, 247, 245)");
+  expect(exportStyles.codeBackground).toBe("rgb(13, 17, 23)");
   expect(exportStyles.surfaceRectHeight).toBeGreaterThan(
     exportStyles.originalSurfaceRectHeight,
   );
@@ -1781,7 +1929,7 @@ test("reorders session tabs with drag-and-drop and keyboard animation", async ({
   const activeNoteId = initialOrder[2];
   expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
 
-  await page.keyboard.press(modifierShortcut("Shift+ArrowLeft"));
+  await page.keyboard.press(modifierShortcut("Shift+["));
   await expectSessionTabReorderAnimation(page);
   await expect.poll(() => getSessionTabNoteIds(page)).toEqual([
     initialOrder[0],
@@ -1790,7 +1938,7 @@ test("reorders session tabs with drag-and-drop and keyboard animation", async ({
   ]);
   expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
 
-  await page.keyboard.press(modifierShortcut("Shift+ArrowRight"));
+  await page.keyboard.press(modifierShortcut("Shift+]"));
   await expectSessionTabReorderAnimation(page);
   await expect.poll(() => getSessionTabNoteIds(page)).toEqual(initialOrder);
   expect(await getActiveSessionTabNoteId(page)).toBe(activeNoteId);
@@ -1843,7 +1991,6 @@ test("keeps keyboard focus inside the editor during repeated Tab", async ({ page
   await expectEditorFocused(page);
   await expect.poll(() => getBulletItemDepth(page, "child")).toBe(1);
 
-  await clickLastEmptyParagraph(page);
   await expectEditorFocused(page);
   for (let index = 0; index < 12; index += 1) {
     await page.keyboard.press("Tab");
@@ -1985,7 +2132,7 @@ test("shows a blocking loading state while sticky windows are prepared", async (
     };
   });
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
     .toBeVisible();
 
   await page.getByTestId("session-sidebar-footer")
@@ -2192,25 +2339,45 @@ test("keeps the sticky header draggable without title chrome", async ({ page }) 
   await expect(page.getByTestId("sticky-title-drag-label")).toHaveCount(0);
 });
 
-test("creates blank sessions after the initial template note", async ({ page }) => {
-  await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
-    .toBeVisible();
-
+test("starts blank and shows the template after closing every tab", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toHaveCount(0);
   await page.getByRole("button", { name: "New session" }).click();
 
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
-    .toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Heading", exact: true }))
-    .toHaveCount(0);
-  await expect(page.getByText("console.log('Hello, world!');"))
-    .toHaveCount(0);
-
   await clickLastEmptyParagraph(page);
   await page.keyboard.type("new blank session");
   await expect(page.getByTestId("sticky-editor-surface").getByText("new blank session"))
     .toBeVisible();
+
+  await page.locator(".session-delete-button").nth(1).click();
+  let moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await moveConfirmDialog.getByRole("button", {
+    name: /Yes, move new blank session to trash/,
+  }).click();
+  await expect(page.getByRole("tab")).toHaveCount(1);
+
+  await page.locator(".session-delete-button").first().click();
+  moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+  await moveConfirmDialog.getByRole("button", {
+    name: /Yes, move Untitled to trash/,
+  }).click();
+
+  await expect(page.getByRole("tab")).toHaveCount(1);
+  await expect(page.getByRole("tab").first()).toHaveAccessibleName(/NotePane/);
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toBeVisible();
+  await expect(page.getByText("A focused workspace for persistent notes"))
+    .toBeVisible();
+  await expect(page.getByTestId("sticky-editor-surface"))
+    .toHaveClass(/is-template-session/);
 });
 
 test("renames a session by double-clicking its tab", async ({ page }) => {
@@ -2235,7 +2402,7 @@ test("derives untitled session names from editor content", async ({ page }) => {
   })).toBeVisible();
 });
 
-test("deletes sidebar sessions while preserving the last remaining tab", async ({ page }) => {
+test("deletes sidebar sessions and keeps the last delete action available", async ({ page }) => {
   await page.getByRole("button", { name: "New session" }).click();
 
   await expect(page.getByRole("tab")).toHaveCount(2);
@@ -2310,7 +2477,7 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
   await moveConfirmDialog.getByRole("button", { name: /Yes, move Untitled to trash/ })
     .click();
   await expect(page.getByRole("tab")).toHaveCount(1);
-  await expect(page.locator(".session-delete-button").first()).toBeDisabled();
+  await expect(page.locator(".session-delete-button").first()).toBeEnabled();
   await expect(page.locator(".session-index-label").first()).toHaveCSS("opacity", "1");
   await expect(page.locator(".session-index-delete").first()).toHaveCSS("opacity", "0");
 
@@ -2381,6 +2548,54 @@ test("deletes sidebar sessions while preserving the last remaining tab", async (
     .click();
   await expect(reopenedPreferencesPanel.getByText("Trash is empty.")).toBeVisible();
   await expect(reopenedTrashRow).toHaveCount(0);
+});
+
+test("wraps long session titles inside the trash confirmation dialog", async ({ page }) => {
+  const longTitle =
+    "benchmarkbenchmarkbenchmarkbenchmarkbenchmarkbenchmarkbenchmarkbenchmark" +
+    " 맞습니다. 문서에서 ## 다음 작업 섹션을 제거했고 마지막 문장이 길게 이어지는 제목";
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.insertText(longTitle);
+  await expect(page.getByRole("tab").first()).toHaveAccessibleName(/benchmark/);
+
+  await page.getByRole("tab").first().hover();
+  await page.locator(".session-delete-button").first().click();
+  const moveConfirmDialog = page.getByRole("dialog", {
+    name: "Move session to trash confirmation",
+  });
+  await expect(moveConfirmDialog).toBeVisible();
+
+  const wrappingMetrics = await moveConfirmDialog.evaluate((dialog) => {
+    const title = dialog.querySelector(".trash-confirm-title");
+    const message = dialog.querySelector(".trash-confirm-message");
+    const note = dialog.querySelector(".trash-confirm-note");
+    return {
+      dialogClientWidth: dialog.clientWidth,
+      dialogScrollWidth: dialog.scrollWidth,
+      titleClientWidth: title.clientWidth,
+      titleScrollWidth: title.scrollWidth,
+      messageClientWidth: message.clientWidth,
+      messageScrollWidth: message.scrollWidth,
+      noteClientWidth: note.clientWidth,
+      noteScrollWidth: note.scrollWidth,
+      noteWhiteSpace: getComputedStyle(note).whiteSpace,
+      noteOverflowWrap: getComputedStyle(note).overflowWrap,
+    };
+  });
+  expect(wrappingMetrics.dialogScrollWidth).toBeLessThanOrEqual(
+    wrappingMetrics.dialogClientWidth + 1,
+  );
+  expect(wrappingMetrics.titleScrollWidth).toBeLessThanOrEqual(
+    wrappingMetrics.titleClientWidth + 1,
+  );
+  expect(wrappingMetrics.messageScrollWidth).toBeLessThanOrEqual(
+    wrappingMetrics.messageClientWidth + 1,
+  );
+  expect(wrappingMetrics.noteScrollWidth).toBeLessThanOrEqual(
+    wrappingMetrics.noteClientWidth + 1,
+  );
+  expect(wrappingMetrics.noteWhiteSpace).toBe("normal");
+  expect(["anywhere", "break-word"]).toContain(wrappingMetrics.noteOverflowWrap);
 });
 
 test("selects trash notes for bulk restore and permanent delete", async ({ page }) => {
@@ -2566,9 +2781,10 @@ test("keeps Enter and Shift+Enter behavior in the editor", async ({ page }) => {
   await page.keyboard.press("Enter");
   await page.keyboard.type("next block");
 
-  await expect(page.getByText("first line")).toBeVisible();
-  await expect(page.getByText("second line")).toBeVisible();
-  await expect(page.getByText("next block")).toBeVisible();
+  const editorSurface = page.getByTestId("sticky-editor-surface");
+  await expect(editorSurface.getByText("first line")).toBeVisible();
+  await expect(editorSurface.getByText("second line")).toBeVisible();
+  await expect(editorSurface.getByText("next block")).toBeVisible();
 
   const blockCount = await page
     .locator(".bn-block-outer")
@@ -2619,7 +2835,7 @@ Training opt-in을 켜지 않음 | **사용 가능** |`;
     };
   });
 
-  expect(pastedTable.tableCount).toBeGreaterThanOrEqual(2);
+  expect(pastedTable.tableCount).toBeGreaterThanOrEqual(1);
   expect(pastedTable.headers).toEqual([
     "Provider",
     "ZDR",
@@ -2635,41 +2851,64 @@ Training opt-in을 켜지 않음 | **사용 가능** |`;
   expect(pastedTable.text).toContain("Training opt-in을 켜지 않음");
 });
 
-test("focuses the last block when clicking empty editor space below blocks", async ({ page }) => {
-  await page.addStyleTag({
-    content: `
-      [data-testid='sticky-editor-surface'] .bn-editor {
-        padding-bottom: 420px !important;
-      }
-    `,
-  });
+test("keeps breathing room above and below the editor document", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  for (let index = 0; index < 34; index += 1) {
+    if (index > 0) {
+      await page.keyboard.press("Enter");
+    }
+    await page.keyboard.insertText(`scroll spacing line ${index + 1}`);
+  }
 
-  const emptyTailPoint = await page.evaluate(() => {
+  const spacingMetrics = await page.evaluate(() => {
     const surface = document.querySelector("[data-testid='sticky-editor-surface']");
-    surface.scrollTop = surface.scrollHeight;
-    const blocks = surface.querySelectorAll(".bn-block-outer");
+    const editor = surface.querySelector(".bn-editor");
+    const editorStyle = getComputedStyle(editor);
+    const blocks = [...surface.querySelectorAll(".bn-block-outer")];
+    const firstBlock = blocks[0];
     const lastBlock = blocks[blocks.length - 1];
-    const surfaceRect = surface.getBoundingClientRect();
+    surface.scrollTop = 0;
+    const surfaceTopRect = surface.getBoundingClientRect();
+    const firstBlockRect = firstBlock.getBoundingClientRect();
+    surface.scrollTop = surface.scrollHeight;
+    const surfaceBottomRect = surface.getBoundingClientRect();
     const lastBlockRect = lastBlock.getBoundingClientRect();
     const point = {
-      x: surfaceRect.left + surfaceRect.width / 2,
-      y: surfaceRect.bottom - 48,
+      x: surfaceBottomRect.left + surfaceBottomRect.width / 2,
+      y: surfaceBottomRect.bottom - 48,
     };
 
     if (point.y <= lastBlockRect.bottom + 8) {
-      throw new Error("The test could not create empty editor space below the last block.");
+      throw new Error("The editor bottom gutter did not create clickable empty space.");
     }
 
-    return point;
+    return {
+      editorPaddingTop: Number.parseFloat(editorStyle.paddingTop),
+      editorPaddingBottom: Number.parseFloat(editorStyle.paddingBottom),
+      emptyTailPoint: point,
+      firstBlockTopGap: firstBlockRect.top - surfaceTopRect.top,
+      lastBlockBottomGap: surfaceBottomRect.bottom - lastBlockRect.bottom,
+      scrollTop: surface.scrollTop,
+    };
   });
+  expect(spacingMetrics.editorPaddingTop).toBeGreaterThanOrEqual(30);
+  expect(spacingMetrics.editorPaddingBottom).toBeGreaterThanOrEqual(120);
+  expect(spacingMetrics.firstBlockTopGap).toBeGreaterThanOrEqual(24);
+  expect(spacingMetrics.lastBlockBottomGap).toBeGreaterThanOrEqual(72);
+  expect(spacingMetrics.scrollTop).toBeGreaterThan(0);
 
-  await page.mouse.click(emptyTailPoint.x, emptyTailPoint.y);
+  await page.mouse.click(
+    spacingMetrics.emptyTailPoint.x,
+    spacingMetrics.emptyTailPoint.y,
+  );
   await page.keyboard.type("bottom empty space focus");
 
-  await expect(page.getByText("bottom empty space focus")).toBeVisible();
+  await expect(page.getByTestId("sticky-editor-surface").getByText("bottom empty space focus"))
+    .toBeVisible();
 });
 
 test("toggles checklist and toggle heading without shell interference", async ({ page }) => {
+  await loadTemplatePreview(page);
   const checkbox = page.getByRole("checkbox").first();
   await expect(checkbox).not.toBeChecked();
   await checkbox.click();
@@ -2677,15 +2916,16 @@ test("toggles checklist and toggle heading without shell interference", async ({
 
   const toggleHeadingButton = page
     .locator(".bn-block-outer")
-    .filter({ hasText: "Toggle Heading" })
+    .filter({ hasText: "Launch checklist" })
     .locator("button")
     .first();
   await toggleHeadingButton.click();
-  await expect(page.getByText("This child block is hidden and shown by the toggle heading."))
+  await expect(page.getByText("Use this template when the workspace is clear"))
     .toBeVisible();
 });
 
 test("shows floating formatting toolbar after text selection", async ({ page }) => {
+  await loadTemplatePreview(page);
   const styledText = page.getByText("Styled Text");
   await styledText.scrollIntoViewIfNeeded();
   await styledText.dblclick();
@@ -2695,6 +2935,7 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
 });
 
 test("keeps BlockNote color and delete menus usable inside the app window", async ({ page }) => {
+  await loadTemplatePreview(page);
   await clickLastEmptyParagraph(page);
   await page.keyboard.type("FormatTarget");
   const formattingTarget = page.getByText("FormatTarget");
@@ -2729,7 +2970,7 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
     getInlineStyledTextBackground(page, "FormatTarget", "backgroundColor", "blue"),
   ).toBe("rgb(221, 235, 241)");
 
-  const paragraph = page.locator(".bn-editor").getByText("Paragraph", { exact: true });
+  const paragraph = page.locator(".bn-editor").getByText("Objective:", { exact: true });
   await page.keyboard.press("Escape");
   await paragraph.scrollIntoViewIfNeeded();
   await paragraph.click();
@@ -2799,12 +3040,13 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await openBlockMenuButton.click();
   await page.getByRole("menuitem", { name: "Delete" }).click();
 
-  await expect(page.locator(".bn-editor").getByText("Paragraph", { exact: true }))
+  await expect(page.locator(".bn-editor").getByText("Objective:", { exact: true }))
     .toHaveCount(0);
 });
 
 test("shows table interaction UI when a table cell is selected", async ({ page }) => {
-  await page.getByRole("cell", { name: "Table Cell" }).first().click();
+  await loadTemplatePreview(page);
+  await page.getByRole("cell", { name: "Tabs" }).first().click();
 
   await expect(page.locator(".bn-table-handle, .bn-table-cell-handle").first())
     .toBeVisible();
@@ -2821,6 +3063,7 @@ test("deletes the current block with Command+X when no text is selected", async 
 });
 
 test("shows image download and crop tools after selecting an image", async ({ page }) => {
+  await loadTemplatePreview(page);
   await page.locator("img.bn-visual-media").first().click();
 
   const imageTools = page.getByRole("toolbar", { name: "Image tools" });
@@ -3069,6 +3312,10 @@ async function getEditorScaleMetrics(page) {
       editorFontScale: getComputedStyle(shell)
         .getPropertyValue("--editor-font-scale")
         .trim() || "1",
+      appFontFamily: getComputedStyle(shell)
+        .getPropertyValue("--notepane-ui-font")
+        .trim(),
+      sidebarFontFamily: getComputedStyle(sidebar).fontFamily,
       editorFontFamily: getComputedStyle(editor).fontFamily,
       shellFontSize: Math.round(Number.parseFloat(getComputedStyle(shell).fontSize)),
       headerHeight: Math.round(header.getBoundingClientRect().height),
@@ -3077,6 +3324,12 @@ async function getEditorScaleMetrics(page) {
       editorSurfaceFontSize: Math.round(Number.parseFloat(getComputedStyle(editorSurface).fontSize) * 100) / 100,
     };
   });
+}
+
+async function loadTemplatePreview(page) {
+  await page.goto("/?template=1");
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toBeVisible();
 }
 
 function modifierShortcut(key) {

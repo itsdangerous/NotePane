@@ -38,75 +38,53 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const DEMO_BLOCKS = [
+const NOTE_PANE_TEMPLATE_BLOCKS = [
   {
     type: "heading",
-    content: "Welcome to BlockNote!",
-  },
-  {
-    type: "paragraph",
+    content: "NotePane",
   },
   {
     type: "paragraph",
     content: [
       {
         type: "text",
-        text: "Blocks:",
-        styles: { bold: true },
-      },
-    ],
-  },
-  {
-    type: "paragraph",
-    content: "Paragraph",
-  },
-  {
-    type: "heading",
-    content: "Heading",
-  },
-  {
-    id: "toggle-heading",
-    type: "heading",
-    props: { isToggleable: true },
-    content: "Toggle Heading",
-    children: [
-      {
-        type: "paragraph",
-        content: "This child block is hidden and shown by the toggle heading.",
+        text: "A focused workspace for persistent notes, fast session switching, and polished exports.",
+        styles: {},
       },
     ],
   },
   {
     type: "quote",
-    content: "Quote",
+    content:
+      "Capture the work, split the context into sessions, and keep the right pane visible when it matters.",
   },
   {
-    type: "bulletListItem",
-    content: "Bullet List Item",
-  },
-  {
-    type: "numberedListItem",
-    content: "Numbered List Item",
-  },
-  {
-    type: "checkListItem",
-    content: "Check List Item",
-  },
-  {
-    id: "toggle-list-item",
-    type: "toggleListItem",
-    content: "Toggle List Item",
+    id: "template-launch-checklist",
+    type: "heading",
+    props: { isToggleable: true },
+    content: "Launch checklist",
     children: [
       {
         type: "paragraph",
-        content: "This child block is hidden and shown by the toggle list.",
+        content: "Use this template when the workspace is clear and you are ready to start a new thread.",
       },
     ],
   },
   {
-    type: "codeBlock",
-    props: { language: "javascript" },
-    content: "console.log('Hello, world!');",
+    type: "checkListItem",
+    content: "Create one session per meeting, paper, decision, or workstream.",
+  },
+  {
+    type: "checkListItem",
+    content: "Pin a sticky window for reference notes that need to stay in view.",
+  },
+  {
+    type: "checkListItem",
+    content: "Tune app and editor typography from Preferences before a long writing pass.",
+  },
+  {
+    type: "heading",
+    content: "Workspace modes",
   },
   {
     type: "table",
@@ -114,53 +92,43 @@ const DEMO_BLOCKS = [
       type: "tableContent",
       rows: [
         {
-          cells: ["Table Cell", "Table Cell", "Table Cell"],
+          cells: ["Mode", "Best for", "Action"],
         },
         {
-          cells: ["Table Cell", "Table Cell", "Table Cell"],
+          cells: ["Tabs", "Drafting, comparing, and organizing sessions", "New session"],
         },
         {
-          cells: ["Table Cell", "Table Cell", "Table Cell"],
+          cells: ["Sticky", "Keeping an active note above other windows", "Switch mode"],
+        },
+        {
+          cells: ["Export", "Turning a finished note into a clean PDF", "Export PDF"],
         },
       ],
     },
   },
   {
-    type: "file",
-  },
-  {
     type: "image",
     props: {
-      url: "https://placehold.co/332x322.jpg",
-      caption: "From https://placehold.co/332x322.jpg",
+      url: "https://placehold.co/960x360/1f2937/f8fafc.png?text=NotePane+Workspace",
+      caption: "NotePane workspace preview",
     },
   },
   {
-    type: "video",
-    props: {
-      url: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
-      caption:
-        "From https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm",
-    },
-  },
-  {
-    type: "audio",
-    props: {
-      url: "https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3",
-      caption:
-        "From https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3",
-    },
-  },
-  {
-    type: "paragraph",
+    type: "heading",
+    content: "Session brief",
   },
   {
     type: "paragraph",
     content: [
       {
         type: "text",
-        text: "Inline Content:",
+        text: "Objective:",
         styles: { bold: true },
+      },
+      {
+        type: "text",
+        text: " Define the outcome before adding supporting notes.",
+        styles: {},
       },
     ],
   },
@@ -173,21 +141,31 @@ const DEMO_BLOCKS = [
         styles: {
           bold: true,
           italic: true,
-          textColor: "red",
-          backgroundColor: "blue",
         },
       },
       {
         type: "text",
-        text: " ",
+        text: " can mark the part that needs a decision or follow-up.",
         styles: {},
       },
+    ],
+  },
+  {
+    id: "template-follow-up",
+    type: "toggleListItem",
+    content: "Follow-up",
+    children: [
       {
-        type: "link",
-        content: "Link",
-        href: "https://www.blocknotejs.org",
+        type: "paragraph",
+        content: "Add owners, dates, or unresolved questions before exporting.",
       },
     ],
+  },
+  {
+    type: "codeBlock",
+    props: { language: "javascript" },
+    content:
+      'const session = {\n  status: "ready",\n  panes: ["tabs", "sticky"],\n  export: "polished",\n};',
   },
   {
     type: "paragraph",
@@ -255,6 +233,7 @@ const EDITOR_FONT_SIZE_PRESETS = [
   144,
 ];
 const DEFAULT_EDITOR_FONT_FAMILY = "system";
+const DEFAULT_APP_FONT_FAMILY = "inter";
 const DEFAULT_KEYBOARD_SHORTCUTS = {
   newSession: "Mod+T",
   newNote: "Mod+N",
@@ -262,8 +241,8 @@ const DEFAULT_KEYBOARD_SHORTCUTS = {
   focusEditor: "Mod+Enter",
   previousTab: "Mod+Alt+ArrowLeft",
   nextTab: "Mod+Alt+ArrowRight",
-  moveTabLeft: "Mod+Shift+ArrowLeft",
-  moveTabRight: "Mod+Shift+ArrowRight",
+  moveTabLeft: "Mod+Shift+[",
+  moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
   toggleLayoutMode: "Mod+Shift+M",
   toggleThemeMode: "Mod+Shift+L",
@@ -275,11 +254,20 @@ const DEFAULT_KEYBOARD_SHORTCUTS = {
   toggleAlwaysOnTop: "Mod+Shift+P",
 };
 const KEYBOARD_SHORTCUT_COMMAND_IDS = Object.keys(DEFAULT_KEYBOARD_SHORTCUTS);
+const KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS = [
+  ...KEYBOARD_SHORTCUT_COMMAND_IDS,
+  "selectTabByNumber",
+];
+const DEFAULT_KEYBOARD_SHORTCUT_ENABLED = Object.fromEntries(
+  KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS.map((commandId) => [commandId, true]),
+);
 const DEFAULT_EDITOR_PREFERENCES = {
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+  appFontFamily: DEFAULT_APP_FONT_FAMILY,
   showTableOfContents: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
+  keyboardShortcutEnabled: DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
 };
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_BUILTIN_FONT_FAMILY_OPTIONS = [
@@ -517,7 +505,8 @@ function App() {
           blocksJSON: null,
           markdown: "",
           theme: DEFAULT_THEME,
-          seedDemoContent: true,
+          seedDemoContent: new URLSearchParams(window.location.search)
+            .get("template") === "1",
           editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
           editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
 	          detached: false,
@@ -564,7 +553,7 @@ function App() {
             blocksJSON: null,
             markdown: "",
             theme: DEFAULT_THEME,
-            seedDemoContent: true,
+            seedDemoContent: false,
             editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
             editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
             detached: false,
@@ -731,15 +720,6 @@ function App() {
 
   const deleteSidebarNote = useCallback(
     async (noteId, noteSnapshot = null) => {
-      if (notes.length <= 1) {
-        return {
-          deleted: false,
-          notes,
-          trash: trashedNotes,
-          activeNote: note,
-        };
-      }
-
       if (electronApi) {
         const result = await electronApi.deleteNote(noteId);
         const nextNotes = Array.isArray(result?.notes)
@@ -787,21 +767,25 @@ function App() {
         trashedAt: now,
         updatedAt: now,
       };
-      setNotes(nextNotes);
+      const templateNote =
+        nextNotes.length === 0 ? createTemplateSessionNote(deletedNote, now) : null;
+      const visibleNotes = templateNote ? [templateNote] : nextNotes;
+      setNotes(visibleNotes);
       setTrashedNotes((currentTrashedNotes) =>
         mergeTrashedNotes(currentTrashedNotes, trashedNote),
       );
       const nextNote =
-        note?.id === noteId
+        templateNote ??
+        (note?.id === noteId
           ? nextNotes[deletedNoteIndex] ?? nextNotes[deletedNoteIndex - 1] ?? null
-          : note;
+          : note);
       if (nextNote) {
         setNote(nextNote);
       }
 
       return {
         deleted: true,
-        notes: nextNotes,
+        notes: visibleNotes,
         trash: mergeTrashedNotes(trashedNotes, trashedNote),
         activeNote: nextNote,
       };
@@ -1065,7 +1049,9 @@ function StickyEditor({
     [note.blocksJSON],
   );
   const initialEditorContent = useMemo(
-    () => parsedStoredBlocks ?? (note.seedDemoContent ? DEMO_BLOCKS : EMPTY_BLOCKS),
+    () =>
+      parsedStoredBlocks ??
+      (note.seedDemoContent ? NOTE_PANE_TEMPLATE_BLOCKS : EMPTY_BLOCKS),
     [note.seedDemoContent, parsedStoredBlocks],
   );
   const initialDisplayTitle = useMemo(
@@ -1110,12 +1096,42 @@ function StickyEditor({
   );
   const editorFontScale = normalizedEditorPreferences.editorFontScale;
   const editorFontFamily = normalizedEditorPreferences.editorFontFamily;
+  const appFontFamily = normalizedEditorPreferences.appFontFamily;
   const showTableOfContents = normalizedEditorPreferences.showTableOfContents;
   const keyboardShortcuts = normalizedEditorPreferences.keyboardShortcuts;
+  const keyboardShortcutEnabled =
+    normalizedEditorPreferences.keyboardShortcutEnabled;
+  const matchesEnabledKeyboardShortcut = useCallback(
+    (event, commandId) =>
+      isKeyboardShortcutEnabled(keyboardShortcutEnabled, commandId) &&
+      matchesKeyboardShortcut(event, keyboardShortcuts[commandId]),
+    [keyboardShortcutEnabled, keyboardShortcuts],
+  );
+  const getEnabledShortcut = useCallback(
+    (commandId) =>
+      isKeyboardShortcutEnabled(keyboardShortcutEnabled, commandId)
+        ? keyboardShortcuts[commandId]
+        : "",
+    [keyboardShortcutEnabled, keyboardShortcuts],
+  );
   const editorFontOptions = useMemo(
     () => getEditorFontFamilyOptions(installedFontFamilies, editorFontFamily),
     [editorFontFamily, installedFontFamilies],
   );
+  const appFontOptions = useMemo(
+    () => getEditorFontFamilyOptions(installedFontFamilies, appFontFamily),
+    [appFontFamily, installedFontFamilies],
+  );
+  const appTypographyStyle = useMemo(() => {
+    const appFontFamilyCss = getEditorFontFamilyCss(
+      appFontFamily,
+      appFontOptions,
+    );
+    return {
+      "--notepane-ui-font": appFontFamilyCss,
+      "--notepane-display-font": appFontFamilyCss,
+    };
+  }, [appFontFamily, appFontOptions]);
   const appThemeMode = normalizeAppTheme(appTheme).mode;
   const normalizedLayoutMode = normalizeLayoutMode(layoutMode);
   const effectiveLayoutMode =
@@ -1144,6 +1160,7 @@ function StickyEditor({
   );
   const shellStyle = {
     ...stickyChromeStyle,
+    ...appTypographyStyle,
     "--editor-font-scale": String(editorFontScale),
     "--editor-font-family": getEditorFontFamilyCss(
       editorFontFamily,
@@ -1209,7 +1226,10 @@ function StickyEditor({
   }, [appThemeMode]);
 
   useEffect(() => {
-    const portalStyleEntries = Object.entries(stickyChromeStyle);
+    const portalStyleEntries = Object.entries({
+      ...stickyChromeStyle,
+      ...appTypographyStyle,
+    });
 
     for (const [name, value] of portalStyleEntries) {
       document.body.style.setProperty(name, value);
@@ -1220,7 +1240,7 @@ function StickyEditor({
         document.body.style.removeProperty(name);
       }
     };
-  }, [stickyChromeStyle]);
+  }, [appTypographyStyle, stickyChromeStyle]);
 
   useEffect(() => {
     setIsPinned(Boolean(note.alwaysOnTop));
@@ -1304,10 +1324,10 @@ function StickyEditor({
     const stillVisible = visibleSessionNotes.some(
       (sessionNote) => sessionNote.id === pendingSessionTrashNote.id,
     );
-    if (!stillVisible || notes.length <= 1) {
+    if (!stillVisible) {
       setPendingSessionTrashNote(null);
     }
-  }, [notes.length, pendingSessionTrashNote, visibleSessionNotes]);
+  }, [pendingSessionTrashNote, visibleSessionNotes]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -1734,7 +1754,7 @@ function StickyEditor({
     const handlePreferencesShortcut = (event) => {
       if (
         isShortcutRecorderTarget(event.target) ||
-        !matchesKeyboardShortcut(event, keyboardShortcuts.preferences)
+        !matchesEnabledKeyboardShortcut(event, "preferences")
       ) {
         return;
       }
@@ -1747,7 +1767,7 @@ function StickyEditor({
     return () => {
       document.removeEventListener("keydown", handlePreferencesShortcut, true);
     };
-  }, [keyboardShortcuts.preferences, openPreferences]);
+  }, [matchesEnabledKeyboardShortcut, openPreferences]);
 
   useEffect(() => {
     const handleChromeShortcut = (event) => {
@@ -1762,19 +1782,19 @@ function StickyEditor({
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleLayoutMode)) {
+      if (matchesEnabledKeyboardShortcut(event, "toggleLayoutMode")) {
         event.preventDefault();
         toggleLayoutMode();
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleThemeMode)) {
+      if (matchesEnabledKeyboardShortcut(event, "toggleThemeMode")) {
         event.preventDefault();
         void onAppThemeModeChanged(appThemeMode === "dark" ? "light" : "dark");
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.exportPdf)) {
+      if (matchesEnabledKeyboardShortcut(event, "exportPdf")) {
         event.preventDefault();
         setIsColorPanelOpen(false);
         setIsStickySettingsOpen(false);
@@ -1786,31 +1806,34 @@ function StickyEditor({
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.increaseEditorFontSize)) {
+      if (matchesEnabledKeyboardShortcut(event, "increaseEditorFontSize")) {
         event.preventDefault();
         adjustEditorFontScale(1);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.decreaseEditorFontSize)) {
+      if (matchesEnabledKeyboardShortcut(event, "decreaseEditorFontSize")) {
         event.preventDefault();
         adjustEditorFontScale(-1);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.attachDetachedNote) && note.detached) {
+      if (
+        matchesEnabledKeyboardShortcut(event, "attachDetachedNote") &&
+        note.detached
+      ) {
         event.preventDefault();
         void onAttachNote(note.id);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.toggleSidebar)) {
+      if (matchesEnabledKeyboardShortcut(event, "toggleSidebar")) {
         event.preventDefault();
         setIsSidebarOpen((value) => !value);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.focusEditor)) {
+      if (matchesEnabledKeyboardShortcut(event, "focusEditor")) {
         event.preventDefault();
         focusEditor();
         return;
@@ -1818,8 +1841,8 @@ function StickyEditor({
 
       if (
         (
-          matchesKeyboardShortcut(event, keyboardShortcuts.newSession) ||
-          matchesKeyboardShortcut(event, keyboardShortcuts.newNote)
+          matchesEnabledKeyboardShortcut(event, "newSession") ||
+          matchesEnabledKeyboardShortcut(event, "newNote")
         ) &&
         effectiveLayoutMode === "tabs"
       ) {
@@ -1835,7 +1858,7 @@ function StickyEditor({
   }, [
     appThemeMode,
     effectiveLayoutMode,
-    keyboardShortcuts,
+    matchesEnabledKeyboardShortcut,
     note.detached,
     note.id,
     onAppThemeModeChanged,
@@ -2264,7 +2287,7 @@ function StickyEditor({
 
   const requestDeleteSessionNote = useCallback(
     (sessionNote) => {
-      if (notes.length <= 1 || removingSessionIds.has(sessionNote.id)) {
+      if (removingSessionIds.has(sessionNote.id)) {
         return;
       }
 
@@ -2279,16 +2302,11 @@ function StickyEditor({
       setSessionColorPanelNoteId(null);
       setPendingSessionTrashNote(sessionNote);
     },
-    [notes.length, removingSessionIds],
+    [removingSessionIds],
   );
 
   const deleteSessionNote = useCallback(
     async (sessionNote) => {
-      if (notes.length <= 1) {
-        showExportToast("At least one session must remain.", "error");
-        return;
-      }
-
       if (removingSessionIds.has(sessionNote.id)) {
         return;
       }
@@ -2336,7 +2354,6 @@ function StickyEditor({
       editor.document,
       getCurrentNoteSnapshot,
       note.id,
-      notes.length,
       onDeleteNote,
       removingSessionIds,
       saveNow,
@@ -2514,6 +2531,10 @@ function StickyEditor({
         return;
       }
 
+      if (!isKeyboardShortcutEnabled(keyboardShortcutEnabled, "selectTabByNumber")) {
+        return;
+      }
+
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
         return;
       }
@@ -2543,7 +2564,7 @@ function StickyEditor({
     return () => {
       document.removeEventListener("keydown", handleSessionShortcut, true);
     };
-  }, [note.id, selectSidebarNote, visibleSessionNotes]);
+  }, [keyboardShortcutEnabled, note.id, selectSidebarNote, visibleSessionNotes]);
 
   useEffect(() => {
     const handleTabModeShortcut = (event) => {
@@ -2559,28 +2580,28 @@ function StickyEditor({
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.moveTabLeft)) {
+      if (matchesEnabledKeyboardShortcut(event, "moveTabLeft")) {
         event.preventDefault();
         event.stopPropagation();
         void moveCurrentSessionNote(-1);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.moveTabRight)) {
+      if (matchesEnabledKeyboardShortcut(event, "moveTabRight")) {
         event.preventDefault();
         event.stopPropagation();
         void moveCurrentSessionNote(1);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.previousTab)) {
+      if (matchesEnabledKeyboardShortcut(event, "previousTab")) {
         event.preventDefault();
         event.stopPropagation();
         void selectRelativeSessionNote(-1);
         return;
       }
 
-      if (matchesKeyboardShortcut(event, keyboardShortcuts.nextTab)) {
+      if (matchesEnabledKeyboardShortcut(event, "nextTab")) {
         event.preventDefault();
         event.stopPropagation();
         void selectRelativeSessionNote(1);
@@ -2593,10 +2614,7 @@ function StickyEditor({
     };
   }, [
     effectiveLayoutMode,
-    keyboardShortcuts.moveTabLeft,
-    keyboardShortcuts.moveTabRight,
-    keyboardShortcuts.nextTab,
-    keyboardShortcuts.previousTab,
+    matchesEnabledKeyboardShortcut,
     moveCurrentSessionNote,
     selectRelativeSessionNote,
     visibleSessionNotes.length,
@@ -2868,17 +2886,17 @@ function StickyEditor({
               <div className="sticky-header-action-list">
                 <StickyPinButton
                   isPinned={isPinned}
-                  shortcut={keyboardShortcuts.toggleAlwaysOnTop}
+                  shortcut={getEnabledShortcut("toggleAlwaysOnTop")}
                   onClick={() => void togglePin()}
                 />
                 <ExportPdfButton
-                  shortcut={keyboardShortcuts.exportPdf}
+                  shortcut={getEnabledShortcut("exportPdf")}
                   onClick={() => void exportNote()}
                 />
                 <LayoutModeSwitch
                   mode={normalizedLayoutMode}
                   compact
-                  shortcut={keyboardShortcuts.toggleLayoutMode}
+                  shortcut={getEnabledShortcut("toggleLayoutMode")}
                   onChange={toggleLayoutMode}
                 />
                 <StickySettingsButton
@@ -2904,7 +2922,10 @@ function StickyEditor({
               type="button"
               className="dock-note-button has-tooltip"
               aria-label="Dock note into tabs"
-              data-tooltip={`Dock to tabs · ${getShortcutLabel(keyboardShortcuts.attachDetachedNote)}`}
+              data-tooltip={formatShortcutTooltip(
+                "Dock to tabs",
+                getEnabledShortcut("attachDetachedNote"),
+              )}
               onMouseDown={preventFocusLoss}
               onClick={() => void onAttachNote(note.id)}
             >
@@ -2933,7 +2954,10 @@ function StickyEditor({
                 type="button"
                 className="sidebar-toggle has-tooltip"
                 aria-label={isSidebarCompact ? "Show sidebar" : "Hide sidebar"}
-                data-tooltip={`${isSidebarCompact ? "Show sidebar" : "Hide sidebar"} · ${getShortcutLabel(keyboardShortcuts.toggleSidebar)}`}
+                data-tooltip={formatShortcutTooltip(
+                  isSidebarCompact ? "Show sidebar" : "Hide sidebar",
+                  getEnabledShortcut("toggleSidebar"),
+                )}
                 onMouseDown={preventFocusLoss}
                 onClick={() => {
                   if (isSidebarCompact) {
@@ -3026,7 +3050,15 @@ function StickyEditor({
                           role="tab"
                           aria-selected={sessionNote.id === note.id}
                           className="session-tab-button has-tooltip"
-                          data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
+                          data-tooltip={formatShortcutTooltip(
+                            `Open ${getSessionDisplayTitle(sessionNote)}`,
+                            isKeyboardShortcutEnabled(
+                              keyboardShortcutEnabled,
+                              "selectTabByNumber",
+                            )
+                              ? `Mod+${index + 1}`
+                              : "",
+                          )}
                           onClick={() => void selectSidebarNote(sessionNote.id)}
                           onDoubleClick={(event) => {
                             event.preventDefault();
@@ -3044,7 +3076,7 @@ function StickyEditor({
                             type="button"
                             className="session-index-button session-delete-button has-tooltip"
                             aria-label={`Delete session ${getSessionDisplayTitle(sessionNote)}`}
-                            disabled={notes.length <= 1}
+                            disabled={removingSessionIds.has(sessionNote.id)}
                             data-tooltip={
                               sessionNote.id === note.id
                                 ? "Move current session to Trash"
@@ -3073,7 +3105,15 @@ function StickyEditor({
                             role="tab"
                             aria-selected={sessionNote.id === note.id}
                             className="session-tab-button has-tooltip"
-                            data-tooltip={`Open ${getSessionDisplayTitle(sessionNote)} · ${getSessionShortcutLabel(index)}`}
+                            data-tooltip={formatShortcutTooltip(
+                              `Open ${getSessionDisplayTitle(sessionNote)}`,
+                              isKeyboardShortcutEnabled(
+                                keyboardShortcutEnabled,
+                                "selectTabByNumber",
+                              )
+                                ? `Mod+${index + 1}`
+                                : "",
+                            )}
                             onClick={() => void selectSidebarNote(sessionNote.id)}
                             onDoubleClick={(event) => {
                               event.preventDefault();
@@ -3090,7 +3130,12 @@ function StickyEditor({
                                 className="session-shortcut"
                                 aria-label={`Shortcut ${getSessionShortcutLabel(index)}`}
                               >
-                                {getSessionShortcutLabel(index)}
+                                {isKeyboardShortcutEnabled(
+                                  keyboardShortcutEnabled,
+                                  "selectTabByNumber",
+                                )
+                                  ? getSessionShortcutLabel(index)
+                                  : ""}
                               </span>
                             )}
                           </span>
@@ -3104,7 +3149,10 @@ function StickyEditor({
                 type="button"
                 className="session-add-button has-tooltip"
                 aria-label="New session"
-                data-tooltip={`New session · ${getShortcutLabel(keyboardShortcuts.newSession)}`}
+                data-tooltip={formatShortcutTooltip(
+                  "New session",
+                  getEnabledShortcut("newSession"),
+                )}
                 onMouseDown={preventFocusLoss}
                 onClick={() => void onCreateNote()}
               >
@@ -3124,18 +3172,18 @@ function StickyEditor({
             >
               <div className="session-sidebar-footer-row">
                 <ExportPdfButton
-                  shortcut={keyboardShortcuts.exportPdf}
+                  shortcut={getEnabledShortcut("exportPdf")}
                   onClick={() => void exportNote()}
                 />
                 <PreferencesButton
-                  shortcut={keyboardShortcuts.preferences}
+                  shortcut={getEnabledShortcut("preferences")}
                   onClick={openPreferences}
                 />
                 <TrashButton onClick={openTrashPreferences} />
                 <LayoutModeSwitch
                   mode={normalizedLayoutMode}
                   compact={isSidebarCompact}
-                  shortcut={keyboardShortcuts.toggleLayoutMode}
+                  shortcut={getEnabledShortcut("toggleLayoutMode")}
                   onChange={toggleLayoutMode}
                 />
               </div>
@@ -3150,7 +3198,11 @@ function StickyEditor({
           </aside>
         )}
         <section
-          className={`sticky-editor-surface${isTableOfContentsVisible ? " has-table-of-contents" : ""}`}
+          className={[
+            "sticky-editor-surface",
+            isTableOfContentsVisible ? "has-table-of-contents" : "",
+            note.seedDemoContent ? "is-template-session" : "",
+          ].filter(Boolean).join(" ")}
           data-testid="sticky-editor-surface"
           data-editor-active={isEditorActive ? "true" : "false"}
           data-toc-visible={isTableOfContentsVisible ? "true" : "false"}
@@ -3259,6 +3311,7 @@ function StickyEditor({
           appThemeMode={appThemeMode}
           editorPreferences={editorPreferences}
           keyboardShortcuts={keyboardShortcuts}
+          appFontOptions={appFontOptions}
           fontOptions={editorFontOptions}
           trashedNotes={trashedNotes}
           onAppThemeModeChange={onAppThemeModeChanged}
@@ -3704,6 +3757,7 @@ function EditorPreferencesSection({
 const PREFERENCE_SHORTCUT_COMMANDS = [
   { id: "newSession", label: "New session" },
   { id: "newNote", label: "New note" },
+  { id: "selectTabByNumber", label: "Open tab by number", fixedShortcut: true },
   { id: "closeWindow", label: "Close window" },
   { id: "focusEditor", label: "Focus editor" },
   { id: "previousTab", label: "Previous tab" },
@@ -3723,9 +3777,14 @@ const PREFERENCE_SHORTCUT_COMMANDS = [
 
 function KeyboardShortcutsSection({
   keyboardShortcuts,
+  keyboardShortcutEnabled,
   onKeyboardShortcutsChange,
+  onKeyboardShortcutEnabledChange,
 }) {
   const normalizedShortcuts = normalizeKeyboardShortcuts(keyboardShortcuts);
+  const normalizedEnabled = normalizeKeyboardShortcutEnabled(
+    keyboardShortcutEnabled,
+  );
   const [recordingCommandId, setRecordingCommandId] = useState(null);
   const [shortcutError, setShortcutError] = useState("");
 
@@ -3737,6 +3796,36 @@ function KeyboardShortcutsSection({
       });
     },
     [normalizedShortcuts, onKeyboardShortcutsChange],
+  );
+
+  const updateShortcutEnabled = useCallback(
+    (command, nextEnabled) => {
+      if (nextEnabled && !command.fixedShortcut) {
+        const conflictCommand = PREFERENCE_SHORTCUT_COMMANDS.find(
+          (candidate) =>
+            candidate.id !== command.id &&
+            !candidate.fixedShortcut &&
+            normalizedEnabled[candidate.id] !== false &&
+            normalizedShortcuts[candidate.id] === normalizedShortcuts[command.id],
+        );
+        if (conflictCommand) {
+          setShortcutError(`Already used by ${conflictCommand.label}.`);
+          return;
+        }
+      }
+
+      onKeyboardShortcutEnabledChange?.({
+        ...normalizedEnabled,
+        [command.id]: nextEnabled,
+      });
+      setRecordingCommandId(null);
+      setShortcutError("");
+    },
+    [
+      normalizedEnabled,
+      normalizedShortcuts,
+      onKeyboardShortcutEnabledChange,
+    ],
   );
 
   const resetShortcut = useCallback(
@@ -3773,6 +3862,8 @@ function KeyboardShortcutsSection({
       const conflictCommand = PREFERENCE_SHORTCUT_COMMANDS.find(
         (candidate) =>
           candidate.id !== command.id &&
+          !candidate.fixedShortcut &&
+          normalizedEnabled[candidate.id] !== false &&
           normalizedShortcuts[candidate.id] === capturedShortcut,
       );
       if (conflictCommand) {
@@ -3784,7 +3875,7 @@ function KeyboardShortcutsSection({
       setRecordingCommandId(null);
       setShortcutError("");
     },
-    [normalizedShortcuts, updateShortcut],
+    [normalizedEnabled, normalizedShortcuts, updateShortcut],
   );
 
   return (
@@ -3792,9 +3883,14 @@ function KeyboardShortcutsSection({
       <div className="preferences-section-title">Keyboard shortcuts</div>
       <div className="shortcut-list" role="list" aria-label="Keyboard shortcuts">
         {PREFERENCE_SHORTCUT_COMMANDS.map((command) => {
-          const shortcut = normalizedShortcuts[command.id];
+          const shortcut = normalizedShortcuts[command.id] ?? "";
+          const isEnabled = normalizedEnabled[command.id] !== false;
           const isRecording = recordingCommandId === command.id;
-          const isDefaultShortcut = shortcut === DEFAULT_KEYBOARD_SHORTCUTS[command.id];
+          const isDefaultShortcut =
+            shortcut === DEFAULT_KEYBOARD_SHORTCUTS[command.id];
+          const shortcutLabel = command.fixedShortcut
+            ? getSessionShortcutRangeLabel()
+            : getShortcutLabel(shortcut);
 
           return (
             <div
@@ -3802,34 +3898,50 @@ function KeyboardShortcutsSection({
               role="listitem"
               key={command.id}
               data-recording={isRecording ? "true" : "false"}
+              data-shortcut-enabled={isEnabled ? "true" : "false"}
             >
-              <span>{command.label}</span>
-              <button
-                type="button"
-                className="shortcut-recorder-button"
-                aria-label={`Shortcut for ${command.label}`}
-                aria-pressed={isRecording ? "true" : "false"}
-                onClick={() => {
-                  setRecordingCommandId(command.id);
-                  setShortcutError("");
-                }}
-                onKeyDown={(event) => {
-                  if (isRecording) {
-                    recordShortcut(command, event);
-                  }
-                }}
-              >
-                {isRecording ? "Recording" : getShortcutLabel(shortcut)}
-              </button>
-              <button
-                type="button"
-                className="shortcut-reset-button"
-                aria-label={`Reset ${command.label} shortcut`}
-                disabled={isDefaultShortcut}
-                onClick={() => resetShortcut(command.id)}
-              >
-                Reset
-              </button>
+              <span className="shortcut-command-label">{command.label}</span>
+              <PreferenceToggleSwitch
+                checked={isEnabled}
+                ariaLabel={`Enable ${command.label} shortcut`}
+                onChange={(nextEnabled) =>
+                  updateShortcutEnabled(command, nextEnabled)
+                }
+              />
+              {command.fixedShortcut ? (
+                <span className="shortcut-fixed-label">{shortcutLabel}</span>
+              ) : (
+                <button
+                  type="button"
+                  className="shortcut-recorder-button"
+                  aria-label={`Shortcut for ${command.label}`}
+                  aria-pressed={isRecording ? "true" : "false"}
+                  onClick={() => {
+                    setRecordingCommandId(command.id);
+                    setShortcutError("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (isRecording) {
+                      recordShortcut(command, event);
+                    }
+                  }}
+                >
+                  {isRecording ? "Recording" : shortcutLabel}
+                </button>
+              )}
+              {command.fixedShortcut ? (
+                <span className="shortcut-reset-spacer" aria-hidden="true" />
+              ) : (
+                <button
+                  type="button"
+                  className="shortcut-reset-button"
+                  aria-label={`Reset ${command.label} shortcut`}
+                  disabled={isDefaultShortcut}
+                  onClick={() => resetShortcut(command.id)}
+                >
+                  Reset
+                </button>
+              )}
             </div>
           );
         })}
@@ -4525,6 +4637,7 @@ function PreferencesWindow({
   appThemeMode,
   editorPreferences,
   keyboardShortcuts,
+  appFontOptions,
   fontOptions,
   trashedNotes,
   onAppThemeModeChange,
@@ -4541,14 +4654,41 @@ function PreferencesWindow({
     setActivePage(normalizePreferencePageId(initialPage));
   }, [initialPage]);
 
+  const normalizedEditorPreferences = useMemo(
+    () => normalizeEditorPreferences(editorPreferences),
+    [editorPreferences],
+  );
+
+  const updateAppFontFamily = useCallback(
+    (nextAppFontFamily) => {
+      onEditorPreferencesChange?.({
+        ...normalizedEditorPreferences,
+        appFontFamily: normalizeAppFontFamily(nextAppFontFamily),
+      });
+    },
+    [normalizedEditorPreferences, onEditorPreferencesChange],
+  );
+
   const updateKeyboardShortcuts = useCallback(
     (nextKeyboardShortcuts) => {
       onEditorPreferencesChange?.({
-        ...normalizeEditorPreferences(editorPreferences),
+        ...normalizedEditorPreferences,
         keyboardShortcuts: normalizeKeyboardShortcuts(nextKeyboardShortcuts),
       });
     },
-    [editorPreferences, onEditorPreferencesChange],
+    [normalizedEditorPreferences, onEditorPreferencesChange],
+  );
+
+  const updateKeyboardShortcutEnabled = useCallback(
+    (nextKeyboardShortcutEnabled) => {
+      onEditorPreferencesChange?.({
+        ...normalizedEditorPreferences,
+        keyboardShortcutEnabled: normalizeKeyboardShortcutEnabled(
+          nextKeyboardShortcutEnabled,
+        ),
+      });
+    },
+    [normalizedEditorPreferences, onEditorPreferencesChange],
   );
 
   const renderActivePreferencePage = () => {
@@ -4596,7 +4736,11 @@ function PreferencesWindow({
         >
           <KeyboardShortcutsSection
             keyboardShortcuts={keyboardShortcuts}
+            keyboardShortcutEnabled={
+              normalizedEditorPreferences.keyboardShortcutEnabled
+            }
             onKeyboardShortcutsChange={updateKeyboardShortcuts}
+            onKeyboardShortcutEnabledChange={updateKeyboardShortcutEnabled}
           />
         </div>
       );
@@ -4619,8 +4763,32 @@ function PreferencesWindow({
           </div>
           <HeaderModeSwitch
             mode={appThemeMode}
-            shortcut={keyboardShortcuts.toggleThemeMode}
+            shortcut={
+              isKeyboardShortcutEnabled(
+                normalizedEditorPreferences.keyboardShortcutEnabled,
+                "toggleThemeMode",
+              )
+                ? keyboardShortcuts.toggleThemeMode
+                : ""
+            }
             onChange={onAppThemeModeChange}
+          />
+        </div>
+        <div className="preference-setting-row app-font-family-setting">
+          <div>
+            <div className="preference-setting-title">App font</div>
+            <div className="preferences-section-description">
+              Interface typeface for chrome, menus, and preferences.
+            </div>
+          </div>
+          <EditorFontFamilyControl
+            className="preferences-font-family-control"
+            fontFamily={normalizedEditorPreferences.appFontFamily}
+            fontOptions={appFontOptions}
+            inputAriaLabel="App font family"
+            menuButtonAriaLabel="Open app font menu"
+            optionsAriaLabel="App font family options"
+            onFontFamilyChange={updateAppFontFamily}
           />
         </div>
       </section>
@@ -4700,7 +4868,10 @@ function HeaderModeSwitch({ mode, shortcut, onChange }) {
       role="switch"
       aria-label="Theme mode"
       aria-checked={isDark}
-      data-tooltip={`${isDark ? "Light mode" : "Dark mode"} · ${getShortcutLabel(shortcut)}`}
+      data-tooltip={formatShortcutTooltip(
+        isDark ? "Light mode" : "Dark mode",
+        shortcut,
+      )}
       onMouseDown={preventFocusLoss}
       onClick={() => onChange(isDark ? "light" : "dark")}
     >
@@ -4735,7 +4906,7 @@ function PreferencesButton({ shortcut, onClick }) {
       type="button"
       className="preferences-icon-button settings-icon-button has-tooltip"
       aria-label="Preferences"
-      data-tooltip={`Preferences · ${getShortcutLabel(shortcut)}`}
+      data-tooltip={formatShortcutTooltip("Preferences", shortcut)}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -4765,7 +4936,7 @@ function ExportPdfButton({ shortcut, onClick }) {
       type="button"
       className="export-icon-button preferences-icon-button has-tooltip"
       aria-label="Export PDF"
-      data-tooltip={`Export PDF · ${getShortcutLabel(shortcut)}`}
+      data-tooltip={formatShortcutTooltip("Export PDF", shortcut)}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -4781,7 +4952,10 @@ function StickyPinButton({ isPinned = false, shortcut, onClick }) {
       className="sticky-pin-button has-tooltip"
       aria-label={isPinned ? "Unpin window" : "Pin window"}
       aria-pressed={isPinned}
-      data-tooltip={`${isPinned ? "Unpin window" : "Pin window"} · ${getShortcutLabel(shortcut)}`}
+      data-tooltip={formatShortcutTooltip(
+        isPinned ? "Unpin window" : "Pin window",
+        shortcut,
+      )}
       onMouseDown={preventFocusLoss}
       onClick={onClick}
     >
@@ -4834,7 +5008,7 @@ function LayoutModeSwitch({ mode, compact = false, shortcut, onChange }) {
       aria-label={actionLabel}
       aria-pressed={isSticky}
       data-layout-mode-target={targetMode}
-      data-tooltip={`${actionLabel} · ${getShortcutLabel(shortcut)}`}
+      data-tooltip={formatShortcutTooltip(actionLabel, shortcut)}
       onMouseDown={preventFocusLoss}
       onClick={onChange}
     >
@@ -5399,6 +5573,27 @@ function parseBlocksJSON(blocksJSON) {
   }
 }
 
+function createTemplateSessionNote(sourceNote = {}, timestamp = Date.now()) {
+  return {
+    id: crypto.randomUUID(),
+    title: "NotePane",
+    titleManuallyEdited: false,
+    blocksJSON: null,
+    markdown: "",
+    bounds: sourceNote.bounds,
+    theme: DEFAULT_THEME,
+    alwaysOnTop: false,
+    detached: false,
+    seedDemoContent: true,
+    editorFontScale: sourceNote.editorFontScale ?? DEFAULT_EDITOR_FONT_SCALE,
+    editorFontFamily: sourceNote.editorFontFamily ?? DEFAULT_EDITOR_FONT_FAMILY,
+    trashedAt: null,
+    sortOrder: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 function mergeNotes(notes, updatedNote) {
   const noteMap = new Map();
   for (const note of Array.isArray(notes) ? notes : []) {
@@ -5661,6 +5856,10 @@ function getSessionShortcutLabel(index) {
   return getShortcutLabel(`Mod+${index + 1}`);
 }
 
+function getSessionShortcutRangeLabel() {
+  return `${getShortcutLabel("Mod+1")}-${getShortcutLabel("Mod+9")}`;
+}
+
 function getShortcutLabel(shortcut) {
   const parsedShortcut = parseKeyboardShortcut(shortcut);
   if (!parsedShortcut) {
@@ -5683,6 +5882,11 @@ function getShortcutLabel(shortcut) {
     parsedShortcut.shift ? "Shift" : "",
     keyLabel,
   ].filter(Boolean).join("+");
+}
+
+function formatShortcutTooltip(label, shortcut) {
+  const shortcutLabel = getShortcutLabel(shortcut);
+  return shortcutLabel ? `${label} · ${shortcutLabel}` : label;
 }
 
 function getLegacyShortcutLabel(keys) {
@@ -5738,6 +5942,12 @@ function matchesKeyboardShortcut(event, shortcut) {
   );
 }
 
+function isKeyboardShortcutEnabled(keyboardShortcutEnabled, commandId) {
+  return (
+    normalizeKeyboardShortcutEnabled(keyboardShortcutEnabled)[commandId] !== false
+  );
+}
+
 function keyboardShortcutFromEvent(event) {
   const key = normalizeKeyboardShortcutEventKey(event);
   if (!key || key === "Escape") {
@@ -5772,6 +5982,26 @@ function normalizeKeyboardShortcuts(
   }
 
   return normalizedShortcuts;
+}
+
+function normalizeKeyboardShortcutEnabled(
+  value,
+  fallback = DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
+) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object"
+    ? fallback
+    : DEFAULT_KEYBOARD_SHORTCUT_ENABLED;
+  const normalizedEnabled = {};
+
+  for (const commandId of KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS) {
+    normalizedEnabled[commandId] =
+      typeof source[commandId] === "boolean"
+        ? source[commandId]
+        : fallbackSource[commandId] !== false;
+  }
+
+  return normalizedEnabled;
 }
 
 function normalizeKeyboardShortcut(value, fallback) {
@@ -5868,6 +6098,14 @@ function normalizeKeyboardShortcutEventKey(event) {
     return "-";
   }
 
+  if (event.code === "BracketLeft") {
+    return "[";
+  }
+
+  if (event.code === "BracketRight") {
+    return "]";
+  }
+
   return normalizeKeyboardShortcutKey(event.key);
 }
 
@@ -5893,6 +6131,14 @@ function normalizeKeyboardShortcutKey(value) {
     slash: "/",
     backslash: "\\",
     backquote: "`",
+    braceleft: "[",
+    "{": "[",
+    bracketleft: "[",
+    leftbracket: "[",
+    braceright: "]",
+    "}": "]",
+    bracketright: "]",
+    rightbracket: "]",
     equal: "=",
     plus: "=",
     minus: "-",
@@ -6695,6 +6941,9 @@ function EditorFontFamilyControl({
   className = "",
   fontFamily,
   fontOptions = EDITOR_BUILTIN_FONT_FAMILY_OPTIONS,
+  inputAriaLabel = "Editor font family",
+  menuButtonAriaLabel = "Open font family menu",
+  optionsAriaLabel = "Font family options",
   onFontFamilyChange,
 }) {
   const normalizedFontFamily = normalizeEditorFontFamily(fontFamily);
@@ -6735,7 +6984,7 @@ function EditorFontFamilyControl({
       <div className="editor-font-family-combobox">
         <input
           className="editor-font-family-input"
-          aria-label="Editor font family"
+          aria-label={inputAriaLabel}
           role="combobox"
           aria-expanded={isFontMenuOpen ? "true" : "false"}
           aria-haspopup="listbox"
@@ -6779,7 +7028,7 @@ function EditorFontFamilyControl({
         <button
           type="button"
           className="editor-font-family-menu-button"
-          aria-label="Open font family menu"
+          aria-label={menuButtonAriaLabel}
           aria-haspopup="listbox"
           aria-expanded={isFontMenuOpen ? "true" : "false"}
           onMouseDown={(event) => {
@@ -6796,7 +7045,7 @@ function EditorFontFamilyControl({
         <FloatingDropdownMenu
           id="editor-font-family-options"
           anchorRef={fontMenuAnchorRef}
-          ariaLabel="Font family options"
+          ariaLabel={optionsAriaLabel}
           className="editor-font-family-menu"
           isOpen={isFontMenuOpen}
           maxHeight={216}
@@ -6976,6 +7225,10 @@ function normalizeEditorPreferences(
       source.editorFontFamily,
       fallbackSource.editorFontFamily,
     ),
+    appFontFamily: normalizeAppFontFamily(
+      source.appFontFamily,
+      fallbackSource.appFontFamily,
+    ),
     showTableOfContents:
       typeof source.showTableOfContents === "boolean"
         ? source.showTableOfContents
@@ -6983,6 +7236,10 @@ function normalizeEditorPreferences(
     keyboardShortcuts: normalizeKeyboardShortcuts(
       source.keyboardShortcuts,
       fallbackSource.keyboardShortcuts,
+    ),
+    keyboardShortcutEnabled: normalizeKeyboardShortcutEnabled(
+      source.keyboardShortcutEnabled,
+      fallbackSource.keyboardShortcutEnabled,
     ),
   };
 }
@@ -7087,6 +7344,18 @@ function normalizeEditorFontFamily(value, fallback = DEFAULT_EDITOR_FONT_FAMILY)
   return isAllowedEditorFontFamily(normalizedFallback)
     ? normalizedFallback
     : DEFAULT_EDITOR_FONT_FAMILY;
+}
+
+function normalizeAppFontFamily(value, fallback = DEFAULT_APP_FONT_FAMILY) {
+  const normalizedValue = normalizeEditorFontFamilyValue(value);
+  if (isAllowedEditorFontFamily(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const normalizedFallback = normalizeEditorFontFamilyValue(fallback);
+  return isAllowedEditorFontFamily(normalizedFallback)
+    ? normalizedFallback
+    : DEFAULT_APP_FONT_FAMILY;
 }
 
 function normalizeEditorFontFamilyValue(value) {
@@ -7395,9 +7664,9 @@ function getStickyShellStyle(
   const controlHoverBackground = isLightBackground
     ? "rgb(255 255 255 / 0.68)"
     : "rgb(255 255 255 / 0.16)";
-  const codeBackground = isLightBackground
-    ? "rgb(255 255 255 / 0.52)"
-    : "rgb(0 0 0 / 0.30)";
+  const codeBorderColor = isLightBackground
+    ? "rgb(31 35 40 / 0.32)"
+    : "rgb(139 148 158 / 0.42)";
   const glassHighlight = isLightBackground
     ? "rgb(255 255 255 / 0.52)"
     : "rgb(255 255 255 / 0.14)";
@@ -7439,8 +7708,10 @@ function getStickyShellStyle(
     "--sticky-portal-menu-shadow": portalMenuShadow,
     "--sticky-control-bg": controlBackground,
     "--sticky-control-hover-bg": controlHoverBackground,
-    "--sticky-code-bg": codeBackground,
-    "--sticky-code-text": textColor,
+    "--sticky-code-bg": "#0d1117",
+    "--sticky-code-text": "#f0f6fc",
+    "--sticky-code-border": codeBorderColor,
+    "--sticky-code-muted": "#8b949e",
     "--sticky-glass-highlight": glassHighlight,
     "--sticky-glass-lowlight": glassLowlight,
     "--sticky-glass-stroke": glassStroke,

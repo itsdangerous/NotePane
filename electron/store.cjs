@@ -15,10 +15,139 @@ const DEFAULT_NOTE_THEME = Object.freeze({
   tabTextOpacity: 1,
 });
 const DEFAULT_THEME = DEFAULT_NOTE_THEME;
+const NOTE_PANE_TEMPLATE_BLOCKS = Object.freeze([
+  {
+    type: "heading",
+    content: "NotePane",
+  },
+  {
+    type: "paragraph",
+    content: "A focused workspace for persistent notes, fast session switching, and polished exports.",
+  },
+  {
+    type: "quote",
+    content:
+      "Capture the work, split the context into sessions, and keep the right pane visible when it matters.",
+  },
+  {
+    id: "template-launch-checklist",
+    type: "heading",
+    props: { isToggleable: true },
+    content: "Launch checklist",
+    children: [
+      {
+        type: "paragraph",
+        content: "Use this template when the workspace is clear and you are ready to start a new thread.",
+      },
+    ],
+  },
+  {
+    type: "checkListItem",
+    content: "Create one session per meeting, paper, decision, or workstream.",
+  },
+  {
+    type: "checkListItem",
+    content: "Pin a sticky window for reference notes that need to stay in view.",
+  },
+  {
+    type: "checkListItem",
+    content: "Tune app and editor typography from Preferences before a long writing pass.",
+  },
+  {
+    type: "heading",
+    content: "Workspace modes",
+  },
+  {
+    type: "table",
+    content: {
+      type: "tableContent",
+      rows: [
+        {
+          cells: ["Mode", "Best for", "Action"],
+        },
+        {
+          cells: ["Tabs", "Drafting, comparing, and organizing sessions", "New session"],
+        },
+        {
+          cells: ["Sticky", "Keeping an active note above other windows", "Switch mode"],
+        },
+        {
+          cells: ["Export", "Turning a finished note into a clean PDF", "Export PDF"],
+        },
+      ],
+    },
+  },
+  {
+    type: "image",
+    props: {
+      url: "https://placehold.co/960x360/1f2937/f8fafc.png?text=NotePane+Workspace",
+      caption: "NotePane workspace preview",
+    },
+  },
+  {
+    type: "heading",
+    content: "Session brief",
+  },
+  {
+    type: "paragraph",
+    content: [
+      {
+        type: "text",
+        text: "Objective:",
+        styles: { bold: true },
+      },
+      {
+        type: "text",
+        text: " Define the outcome before adding supporting notes.",
+        styles: {},
+      },
+    ],
+  },
+  {
+    type: "paragraph",
+    content: [
+      {
+        type: "text",
+        text: "Styled Text",
+        styles: {
+          bold: true,
+          italic: true,
+        },
+      },
+      {
+        type: "text",
+        text: " can mark the part that needs a decision or follow-up.",
+        styles: {},
+      },
+    ],
+  },
+  {
+    id: "template-follow-up",
+    type: "toggleListItem",
+    content: "Follow-up",
+    children: [
+      {
+        type: "paragraph",
+        content: "Add owners, dates, or unresolved questions before exporting.",
+      },
+    ],
+  },
+  {
+    type: "codeBlock",
+    props: { language: "javascript" },
+    content:
+      'const session = {\n  status: "ready",\n  panes: ["tabs", "sticky"],\n  export: "polished",\n};',
+  },
+  {
+    type: "paragraph",
+  },
+]);
+const NOTE_PANE_TEMPLATE_BLOCKS_JSON = JSON.stringify(NOTE_PANE_TEMPLATE_BLOCKS);
 const DEFAULT_EDITOR_FONT_SCALE = 1;
 const MIN_EDITOR_FONT_SCALE = 0.38;
 const MAX_EDITOR_FONT_SCALE = 9;
 const DEFAULT_EDITOR_FONT_FAMILY = "system";
+const DEFAULT_APP_FONT_FAMILY = "inter";
 const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
   newSession: "Mod+T",
   newNote: "Mod+N",
@@ -26,8 +155,8 @@ const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
   focusEditor: "Mod+Enter",
   previousTab: "Mod+Alt+ArrowLeft",
   nextTab: "Mod+Alt+ArrowRight",
-  moveTabLeft: "Mod+Shift+ArrowLeft",
-  moveTabRight: "Mod+Shift+ArrowRight",
+  moveTabLeft: "Mod+Shift+[",
+  moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
   toggleLayoutMode: "Mod+Shift+M",
   toggleThemeMode: "Mod+Shift+L",
@@ -38,14 +167,27 @@ const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
   attachDetachedNote: "Mod+Shift+D",
   toggleAlwaysOnTop: "Mod+Shift+P",
 });
+const KEYBOARD_SHORTCUT_COMMAND_IDS = Object.keys(DEFAULT_KEYBOARD_SHORTCUTS);
+const KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS = [
+  ...KEYBOARD_SHORTCUT_COMMAND_IDS,
+  "selectTabByNumber",
+];
+const DEFAULT_KEYBOARD_SHORTCUT_ENABLED = Object.freeze(
+  Object.fromEntries(
+    KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS.map((commandId) => [commandId, true]),
+  ),
+);
 const LEGACY_DEFAULT_TOGGLE_SIDEBAR_SHORTCUT = "Mod+B";
+const LEGACY_DEFAULT_MOVE_TAB_LEFT_SHORTCUT = "Mod+Shift+ArrowLeft";
+const LEGACY_DEFAULT_MOVE_TAB_RIGHT_SHORTCUT = "Mod+Shift+ArrowRight";
 const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+  appFontFamily: DEFAULT_APP_FONT_FAMILY,
   showTableOfContents: false,
   keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
+  keyboardShortcutEnabled: DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
 });
-const KEYBOARD_SHORTCUT_COMMAND_IDS = Object.keys(DEFAULT_KEYBOARD_SHORTCUTS);
 const LOCAL_FONT_VALUE_PREFIX = "local:";
 const EDITOR_FONT_FAMILIES = new Set([
   "system",
@@ -101,9 +243,7 @@ class StickyStore {
         : 1;
       const resetLegacyAlwaysOnTop = version < 3;
       const editorPreferences = normalizeEditorPreferences(
-        version < 8
-          ? migrateLegacyEditorPreferences(parsedObject.editorPreferences)
-          : parsedObject.editorPreferences,
+        migrateLegacyEditorPreferences(parsedObject.editorPreferences, version),
       );
       this.state = {
         appTheme: normalizeAppTheme(
@@ -223,12 +363,12 @@ class StickyStore {
   deleteNote(noteId) {
     const note = this.getNote(noteId);
     const activeNotes = this.listNotes();
-    if (!note || activeNotes.length <= 1) {
+    if (!note) {
       return {
         deleted: false,
         notes: activeNotes,
         trash: this.listTrash(),
-        activeNote: note ?? activeNotes[0] ?? null,
+        activeNote: activeNotes[0] ?? null,
       };
     }
 
@@ -242,16 +382,48 @@ class StickyStore {
     note.detached = false;
     note.alwaysOnTop = false;
     note.updatedAt = now;
+    const templateNote =
+      activeNotes.length === 1 ? this.createTemplateSessionNote(note, now) : null;
     this.save();
+
+    const activeNote =
+      templateNote ??
+      (fallbackActiveNote
+        ? this.getNote(fallbackActiveNote.id)
+        : this.listNotes()[0] ?? null);
 
     return {
       deleted: true,
       notes: this.listNotes(),
       trash: this.listTrash(),
-      activeNote: fallbackActiveNote
-        ? this.getNote(fallbackActiveNote.id)
-        : this.listNotes()[0] ?? null,
+      activeNote,
     };
+  }
+
+  createTemplateSessionNote(sourceNote = {}, timestamp = Date.now()) {
+    const editorPreferences = this.getEditorPreferences();
+    const note = normalizeNote({
+      id: randomUUID(),
+      title: "NotePane",
+      titleManuallyEdited: false,
+      blocksJSON: NOTE_PANE_TEMPLATE_BLOCKS_JSON,
+      markdown: "",
+      bounds: sourceNote.bounds,
+      theme: DEFAULT_NOTE_THEME,
+      alwaysOnTop: false,
+      detached: false,
+      seedDemoContent: true,
+      editorFontScale: sourceNote.editorFontScale ?? editorPreferences.editorFontScale,
+      editorFontFamily:
+        sourceNote.editorFontFamily ?? editorPreferences.editorFontFamily,
+      trashedAt: null,
+      sortOrder: nextNoteSortOrder(this.state.notes),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    this.state.notes.push(note);
+    return note;
   }
 
   restoreNote(noteId) {
@@ -431,7 +603,7 @@ class StickyStore {
       temporaryPath,
       JSON.stringify(
         {
-          version: 9,
+          version: 10,
           appTheme: this.state.appTheme,
           layoutMode: this.state.layoutMode,
           editorPreferences: this.state.editorPreferences,
@@ -712,30 +884,48 @@ function stripMarkdownTitleSyntax(value) {
     .replace(/[*_`~]/g, "");
 }
 
-function migrateLegacyEditorPreferences(value) {
+function migrateLegacyEditorPreferences(value, version = 1) {
   const source = value && typeof value === "object" ? value : {};
   const keyboardShortcuts = source.keyboardShortcuts;
   if (!keyboardShortcuts || typeof keyboardShortcuts !== "object") {
     return value;
   }
 
+  const nextKeyboardShortcuts = { ...keyboardShortcuts };
   const parsedToggleSidebar = parseKeyboardShortcut(
     keyboardShortcuts.toggleSidebar,
   );
   if (
-    !parsedToggleSidebar ||
-    formatKeyboardShortcutValue(parsedToggleSidebar) !==
+    version < 8 &&
+    parsedToggleSidebar &&
+    formatKeyboardShortcutValue(parsedToggleSidebar) ===
       LEGACY_DEFAULT_TOGGLE_SIDEBAR_SHORTCUT
   ) {
-    return value;
+    nextKeyboardShortcuts.toggleSidebar =
+      DEFAULT_KEYBOARD_SHORTCUTS.toggleSidebar;
+  }
+
+  if (
+    version < 10 &&
+    normalizeKeyboardShortcut(keyboardShortcuts.moveTabLeft) ===
+      LEGACY_DEFAULT_MOVE_TAB_LEFT_SHORTCUT
+  ) {
+    nextKeyboardShortcuts.moveTabLeft =
+      DEFAULT_KEYBOARD_SHORTCUTS.moveTabLeft;
+  }
+
+  if (
+    version < 10 &&
+    normalizeKeyboardShortcut(keyboardShortcuts.moveTabRight) ===
+      LEGACY_DEFAULT_MOVE_TAB_RIGHT_SHORTCUT
+  ) {
+    nextKeyboardShortcuts.moveTabRight =
+      DEFAULT_KEYBOARD_SHORTCUTS.moveTabRight;
   }
 
   return {
     ...source,
-    keyboardShortcuts: {
-      ...keyboardShortcuts,
-      toggleSidebar: DEFAULT_KEYBOARD_SHORTCUTS.toggleSidebar,
-    },
+    keyboardShortcuts: nextKeyboardShortcuts,
   };
 }
 
@@ -790,6 +980,10 @@ function normalizeEditorPreferences(
       source.editorFontFamily,
       fallbackSource.editorFontFamily,
     ),
+    appFontFamily: normalizeAppFontFamily(
+      source.appFontFamily,
+      fallbackSource.appFontFamily,
+    ),
     showTableOfContents:
       typeof source.showTableOfContents === "boolean"
         ? source.showTableOfContents
@@ -797,6 +991,10 @@ function normalizeEditorPreferences(
     keyboardShortcuts: normalizeKeyboardShortcuts(
       source.keyboardShortcuts,
       fallbackSource.keyboardShortcuts,
+    ),
+    keyboardShortcutEnabled: normalizeKeyboardShortcutEnabled(
+      source.keyboardShortcutEnabled,
+      fallbackSource.keyboardShortcutEnabled,
     ),
   };
 }
@@ -819,6 +1017,26 @@ function normalizeKeyboardShortcuts(
   }
 
   return normalizedShortcuts;
+}
+
+function normalizeKeyboardShortcutEnabled(
+  value,
+  fallback = DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
+) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object"
+    ? fallback
+    : DEFAULT_KEYBOARD_SHORTCUT_ENABLED;
+  const normalizedEnabled = {};
+
+  for (const commandId of KEYBOARD_SHORTCUT_TOGGLE_COMMAND_IDS) {
+    normalizedEnabled[commandId] =
+      typeof source[commandId] === "boolean"
+        ? source[commandId]
+        : fallbackSource[commandId] !== false;
+  }
+
+  return normalizedEnabled;
 }
 
 function normalizeKeyboardShortcut(value, fallback) {
@@ -913,6 +1131,14 @@ function normalizeKeyboardShortcutKey(value) {
     slash: "/",
     backslash: "\\",
     backquote: "`",
+    braceleft: "[",
+    "{": "[",
+    bracketleft: "[",
+    leftbracket: "[",
+    braceright: "]",
+    "}": "]",
+    bracketright: "]",
+    rightbracket: "]",
     equal: "=",
     plus: "=",
     minus: "-",
@@ -1024,6 +1250,18 @@ function normalizeEditorFontFamily(value, fallback = DEFAULT_EDITOR_FONT_FAMILY)
     : DEFAULT_EDITOR_FONT_FAMILY;
 }
 
+function normalizeAppFontFamily(value, fallback = DEFAULT_APP_FONT_FAMILY) {
+  const normalizedValue = normalizeEditorFontFamilyValue(value);
+  if (isAllowedEditorFontFamily(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const normalizedFallback = normalizeEditorFontFamilyValue(fallback);
+  return isAllowedEditorFontFamily(normalizedFallback)
+    ? normalizedFallback
+    : DEFAULT_APP_FONT_FAMILY;
+}
+
 function normalizeEditorFontFamilyValue(value) {
   if (typeof value !== "string") {
     return "";
@@ -1098,5 +1336,7 @@ module.exports = {
   DEFAULT_THEME,
   DEFAULT_EDITOR_FONT_SCALE,
   DEFAULT_EDITOR_FONT_FAMILY,
+  DEFAULT_APP_FONT_FAMILY,
   DEFAULT_KEYBOARD_SHORTCUTS,
+  DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
 };

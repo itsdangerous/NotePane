@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const {
   StickyStore,
   DEFAULT_KEYBOARD_SHORTCUTS,
+  DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
 } = require("../../electron/store.cjs");
 
 test("creates, saves, and reloads a local note", () => {
@@ -298,8 +299,10 @@ test("updates editor preferences and applies them to new notes", () => {
   assert.deepEqual(store.getEditorPreferences(), {
     editorFontScale: 1,
     editorFontFamily: "system",
+    appFontFamily: "inter",
     showTableOfContents: false,
     keyboardShortcuts: DEFAULT_KEYBOARD_SHORTCUTS,
+    keyboardShortcutEnabled: DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
   });
 
   const keyboardShortcuts = {
@@ -307,17 +310,26 @@ test("updates editor preferences and applies them to new notes", () => {
     focusEditor: "Mod+Shift+F",
     toggleSidebar: "Mod+Shift+B",
   };
+  const keyboardShortcutEnabled = {
+    ...DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
+    exportPdf: false,
+    selectTabByNumber: false,
+  };
 
   assert.deepEqual(store.updateEditorPreferences({
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    appFontFamily: "garamond",
     showTableOfContents: true,
     keyboardShortcuts,
+    keyboardShortcutEnabled,
   }), {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    appFontFamily: "garamond",
     showTableOfContents: true,
     keyboardShortcuts,
+    keyboardShortcutEnabled,
   });
 
   const note = store.createNote({ width: 900, height: 700 });
@@ -328,8 +340,10 @@ test("updates editor preferences and applies them to new notes", () => {
   assert.deepEqual(reloadedStore.getEditorPreferences(), {
     editorFontScale: 1.5,
     editorFontFamily: "local:Pretendard",
+    appFontFamily: "garamond",
     showTableOfContents: true,
     keyboardShortcuts,
+    keyboardShortcutEnabled,
   });
 });
 
@@ -384,6 +398,38 @@ test("migrates legacy default sidebar shortcut away from Mod+B", () => {
   assert.equal(
     currentStore.getEditorPreferences().keyboardShortcuts.toggleSidebar,
     "Mod+B",
+  );
+});
+
+test("migrates legacy default tab move shortcuts away from arrows", () => {
+  const directory = createTemporaryDirectory();
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "notes.json"),
+    JSON.stringify({
+      version: 9,
+      editorPreferences: {
+        editorFontScale: 1,
+        editorFontFamily: "system",
+        showTableOfContents: false,
+        keyboardShortcuts: {
+          ...DEFAULT_KEYBOARD_SHORTCUTS,
+          moveTabLeft: "Mod+Shift+ArrowLeft",
+          moveTabRight: "Mod+Shift+ArrowRight",
+        },
+      },
+      notes: [],
+    }),
+    "utf8",
+  );
+
+  const store = new StickyStore(directory);
+  const shortcuts = store.getEditorPreferences().keyboardShortcuts;
+  assert.equal(shortcuts.moveTabLeft, "Mod+Shift+[");
+  assert.equal(shortcuts.moveTabRight, "Mod+Shift+]");
+  assert.deepEqual(
+    store.getEditorPreferences().keyboardShortcutEnabled,
+    DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
   );
 });
 
@@ -487,7 +533,7 @@ test("migrates legacy per-note mode to global app theme", () => {
   });
 });
 
-test("moves notes to trash, restores them, and preserves at least one session", () => {
+test("moves notes to trash and creates a template after the last session closes", () => {
   const directory = createTemporaryDirectory();
   const store = new StickyStore(directory);
   const firstNote = store.createNote({ width: 900, height: 700 });
@@ -502,11 +548,19 @@ test("moves notes to trash, restores them, and preserves at least one session", 
   assert.deepEqual(store.listTrash().map((note) => note.id), [firstNote.id]);
   assert.equal(Number.isFinite(store.listTrash()[0].trashedAt), true);
 
-  const blocked = store.deleteNote(secondNote.id);
+  const finalDeleted = store.deleteNote(secondNote.id);
 
-  assert.equal(blocked.deleted, false);
-  assert.deepEqual(store.listNotes().map((note) => note.id), [secondNote.id]);
-  assert.deepEqual(store.listTrash().map((note) => note.id), [firstNote.id]);
+  assert.equal(finalDeleted.deleted, true);
+  assert.equal(finalDeleted.activeNote.seedDemoContent, true);
+  assert.equal(finalDeleted.activeNote.title, "NotePane");
+  assert.match(finalDeleted.activeNote.blocksJSON, /NotePane/);
+  assert.deepEqual(store.listNotes().map((note) => note.id), [
+    finalDeleted.activeNote.id,
+  ]);
+  assert.deepEqual(
+    store.listTrash().map((note) => note.id).sort(),
+    [firstNote.id, secondNote.id].sort(),
+  );
 
   const restored = store.restoreNote(firstNote.id);
 
@@ -515,17 +569,19 @@ test("moves notes to trash, restores them, and preserves at least one session", 
   assert.equal(restored.note.trashedAt, null);
   assert.deepEqual(store.listNotes().map((note) => note.id), [
     firstNote.id,
-    secondNote.id,
+    finalDeleted.activeNote.id,
   ]);
-  assert.deepEqual(store.listTrash(), []);
+  assert.deepEqual(store.listTrash().map((note) => note.id), [secondNote.id]);
 
   const deletedAgain = store.deleteNote(firstNote.id);
   const purged = store.purgeNote(firstNote.id);
 
   assert.equal(deletedAgain.deleted, true);
   assert.equal(purged.deleted, true);
-  assert.deepEqual(store.listTrash(), []);
-  assert.deepEqual(store.listNotes().map((note) => note.id), [secondNote.id]);
+  assert.deepEqual(store.listTrash().map((note) => note.id), [secondNote.id]);
+  assert.deepEqual(store.listNotes().map((note) => note.id), [
+    finalDeleted.activeNote.id,
+  ]);
   assert.equal(store.restoreNote(firstNote.id).restored, false);
 });
 

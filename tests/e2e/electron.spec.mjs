@@ -15,8 +15,8 @@ test("Electron app opens a sticky window and persists editor content", async () 
   try {
     const page = await electronApp.firstWindow();
     await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
-      .toBeVisible();
+    await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+      .toHaveCount(0);
 
     await page.getByRole("tab").first().dblclick();
     await page.getByLabel("Session name").fill("Project note");
@@ -77,6 +77,47 @@ test("Electron app opens a sticky window and persists editor content", async () 
       .toBeGreaterThan(1000);
     expect(fs.existsSync(path.join(exportDirectory, "Project note.png")))
       .toBe(false);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron shows the NotePane template after the last tab is moved to trash", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+      .toHaveCount(0);
+
+    const closedNoteId = await page.evaluate(async () => {
+      const noteId = await window.blocknoteSticky.getCurrentNoteId();
+      await window.blocknoteSticky.deleteNote(noteId);
+      return noteId;
+    });
+
+    await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+      .toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    await expect(page.getByRole("tab").first()).toHaveAccessibleName(/NotePane/);
+    await expect(page.getByText("A focused workspace for persistent notes"))
+      .toBeVisible();
+
+    await expect.poll(() => getStoredTrashState(userDataDirectory)).toEqual({
+      activeNoteIds: [expect.any(String)],
+      trashedNoteIds: [closedNoteId],
+    });
+    const persistedState = JSON.parse(
+      fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+    );
+    const templateNote = persistedState.notes.find((note) => !note.trashedAt);
+    expect(templateNote.seedDemoContent).toBe(true);
+    expect(templateNote.title).toBe("NotePane");
+    expect(templateNote.blocksJSON).toContain("Launch checklist");
   } finally {
     await electronApp.close();
   }
@@ -209,8 +250,8 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
   try {
     let page = await electronApp.firstWindow();
     await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Welcome to BlockNote!" }))
-      .toBeVisible();
+    await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+      .toHaveCount(0);
 
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {

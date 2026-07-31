@@ -218,7 +218,7 @@ function closeFocusedTabOrWindow() {
 
 function closeTabSession(noteId) {
   const dockedNotes = store.listNotes().filter((note) => !note.detached);
-  if (dockedNotes.length <= 1) {
+  if (dockedNotes.length === 0) {
     return;
   }
 
@@ -757,8 +757,13 @@ function buildMenu() {
 }
 
 function getMenuAccelerator(commandId) {
+  const editorPreferences = store?.getEditorPreferences?.();
+  if (editorPreferences?.keyboardShortcutEnabled?.[commandId] === false) {
+    return undefined;
+  }
+
   const shortcut =
-    store?.getEditorPreferences?.().keyboardShortcuts?.[commandId] ??
+    editorPreferences?.keyboardShortcuts?.[commandId] ??
     DEFAULT_KEYBOARD_SHORTCUTS[commandId];
 
   return electronAcceleratorForShortcut(shortcut);
@@ -1444,7 +1449,7 @@ app.whenReady().then(() => {
   buildMenu();
 
   if (store.listNotes().length === 0) {
-    store.createNote(nextWindowBounds(), { seedDemoContent: true });
+    store.createNote(nextWindowBounds());
   }
 
   syncWindowsForLayoutMode();

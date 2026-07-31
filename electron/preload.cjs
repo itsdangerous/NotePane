@@ -1,11 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("blocknoteSticky", {
+  platform: process.platform,
   getCurrentNoteId: () => ipcRenderer.invoke("notes:get-current-id"),
   getNote: (noteId) => ipcRenderer.invoke("notes:get", noteId),
   listNotes: () => ipcRenderer.invoke("notes:list"),
   listTrash: () => ipcRenderer.invoke("trash:list"),
-  createNote: () => ipcRenderer.invoke("notes:create"),
+  createNote: (options) => ipcRenderer.invoke("notes:create", options),
   reorderNotes: (noteIds) => ipcRenderer.invoke("notes:reorder", noteIds),
   deleteNote: (noteId) => ipcRenderer.invoke("notes:delete", noteId),
   restoreNote: (noteId) => ipcRenderer.invoke("trash:restore", noteId),
@@ -28,12 +29,18 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
   saveAsset: (payload) => ipcRenderer.invoke("assets:save-url", payload),
   listFonts: () => ipcRenderer.invoke("fonts:list"),
   moveWindowBy: (payload) => ipcRenderer.invoke("window:move-by", payload),
+  closeCurrentWindow: () => ipcRenderer.invoke("window:close-current"),
   setAlwaysOnTop: (alwaysOnTop) =>
     ipcRenderer.invoke("window:set-always-on-top", alwaysOnTop),
   onOpenPreferences: (callback) => {
     const listener = () => callback();
     ipcRenderer.on("preferences:open", listener);
     return () => ipcRenderer.removeListener("preferences:open", listener);
+  },
+  onCreateNoteRequested: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("notes:create-requested", listener);
+    return () => ipcRenderer.removeListener("notes:create-requested", listener);
   },
   onAppThemeChanged: (callback) => {
     const listener = (_event, appTheme) => callback(appTheme);

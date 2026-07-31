@@ -83,6 +83,7 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. OS별 기본 위�
 - Dock a detached sticky window back into tab sessions
 - Sticky mode arranges sessions as compact sticky-note windows
 - Sticky mode supports per-session pastel background color and opacity from the header settings modal
+- Sticky header actions open from the three-dot button and include a close-window icon (`Command/Ctrl + W`)
 - Sticky color/opacity carries back to the sidebar session tab color in Tab session mode
 - Dashed bottom button for new sidebar sessions
 - `Command/Ctrl + T` new sidebar session tab
@@ -90,6 +91,7 @@ Electron `userData` 경로의 `notes.json`에 저장합니다. OS별 기본 위�
 - `Command/Ctrl + Option/Alt + Left/Right` previous/next sidebar session switching with wrap-around
 - `Command/Ctrl + W` closes the current tab in tab session mode
 - `Command/Ctrl + Shift + M` mode switch
+- `Command/Ctrl + Shift + O` Table of Contents on/off
 - `Command/Ctrl + Shift + L` Light/Dark toggle
 - `Command/Ctrl + Shift + E` export menu
 - Double-click session rename

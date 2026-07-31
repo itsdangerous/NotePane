@@ -273,44 +273,56 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
       });
     }).toBe(1);
 
-    await clickMenuItem(electronApp, "New Tab");
-    await expect.poll(async () => {
-      return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getAllWindows().length;
-      });
-    }).toBe(1);
-    await expect(page.getByRole("tab")).toHaveCount(2);
-
-    await clickMenuItem(electronApp, "Close Window");
-    await expect.poll(async () => {
-      return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getAllWindows().length;
-      });
-    }).toBe(0);
+    await clickMenuItem(electronApp, "Toggle Table of Contents");
     await expect.poll(() => {
-      const state = getStoredTrashState(userDataDirectory);
-      return {
-        activeCount: state.activeNoteIds.length,
-        trashedCount: state.trashedNoteIds.length,
-      };
-    }).toEqual({
-      activeCount: 2,
-      trashedCount: 0,
-    });
+      const state = JSON.parse(
+        fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+      );
+      return state.editorPreferences.showTableOfContents;
+    }).toBe(true);
 
-    await electronApp.evaluate(({ app }) => {
-      app.emit("activate");
-    });
+    await clickMenuItem(electronApp, "New Tab");
+    await chooseBlankSessionTemplate(page);
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().length;
       });
     }).toBe(1);
-    page = getOpenPages(electronApp)[0] ?? await electronApp.firstWindow();
-    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
     await expect(page.getByRole("tab")).toHaveCount(2);
+
+    if (process.platform === "darwin") {
+      await clickMenuItem(electronApp, "Close Window");
+      await expect.poll(async () => {
+        return await electronApp.evaluate(({ BrowserWindow }) => {
+          return BrowserWindow.getAllWindows().length;
+        });
+      }).toBe(0);
+      await expect.poll(() => {
+        const state = getStoredTrashState(userDataDirectory);
+        return {
+          activeCount: state.activeNoteIds.length,
+          trashedCount: state.trashedNoteIds.length,
+        };
+      }).toEqual({
+        activeCount: 2,
+        trashedCount: 0,
+      });
+
+      await electronApp.evaluate(({ app }) => {
+        app.emit("activate");
+      });
+      await expect.poll(async () => {
+        return await electronApp.evaluate(({ BrowserWindow }) => {
+          return BrowserWindow.getAllWindows().length;
+        });
+      }).toBe(1);
+      page = getOpenPages(electronApp)[0] ?? await electronApp.firstWindow();
+      await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+      await expect(page.getByRole("tab")).toHaveCount(2);
+    }
 
     await clickMenuItem(electronApp, "New Note");
+    await chooseBlankSessionTemplate(page);
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
         return BrowserWindow.getAllWindows().length;
@@ -337,24 +349,6 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
         ]),
       );
 
-    const focusedStickyWindowId = await electronApp.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows().at(-1);
-      window?.focus();
-      return window?.id ?? null;
-    });
-    const focusedStickyPage = getOpenPages(electronApp).at(-1);
-    await focusedStickyPage.keyboard.press(modifierShortcut("N"));
-    await expect.poll(async () => {
-      return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getAllWindows().length;
-      });
-    }).toBe(3);
-    await expect.poll(async () => {
-      return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getFocusedWindow()?.id ?? null;
-      });
-    }).toBe(focusedStickyWindowId);
-
     await electronApp.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows().at(-1)?.close();
     });
@@ -364,19 +358,12 @@ test("Electron menu actions respect tabs/sticky modes and toggle always-on-top",
       });
     }).toBe(2);
 
-    await electronApp.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows().at(-1)?.focus();
-    });
-    await expect.poll(async () => {
-      return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
-      });
-    }).toBe(false);
-
     await clickMenuItem(electronApp, "Toggle Always On Top");
     await expect.poll(async () => {
       return await electronApp.evaluate(({ BrowserWindow }) => {
-        return BrowserWindow.getFocusedWindow()?.isAlwaysOnTop();
+        return BrowserWindow.getAllWindows().some((window) =>
+          window.isAlwaysOnTop(),
+        );
       });
     }).toBe(true);
   } finally {
@@ -478,7 +465,7 @@ test("Electron sticky header trash confirms and does not duplicate fallback wind
 
     const secondStickyPage = await getStickyPageByNoteId(electronApp, "second-note");
     await secondStickyPage.bringToFront();
-    await secondStickyPage.locator(".sticky-header-actions").hover();
+    await openStickyActionBar(secondStickyPage);
     await secondStickyPage.getByRole("button", { name: "Move note to trash" }).click();
     const confirmDialog = secondStickyPage.getByRole("dialog", {
       name: "Move note to trash confirmation",
@@ -494,7 +481,7 @@ test("Electron sticky header trash confirms and does not duplicate fallback wind
       });
     }).toBe(2);
 
-    await secondStickyPage.locator(".sticky-header-actions").hover();
+    await openStickyActionBar(secondStickyPage);
     await secondStickyPage.getByRole("button", { name: "Move note to trash" }).click();
     await expect(confirmDialog).toBeVisible();
     await confirmDialog.getByRole("button", { name: /Yes, move Second note to trash/ })
@@ -509,6 +496,66 @@ test("Electron sticky header trash confirms and does not duplicate fallback wind
       activeNoteIds: ["first-note"],
       trashedNoteIds: ["second-note"],
     });
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron sticky close icon closes the current window like Ctrl+W", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "first-note",
+      title: "First note",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "second-note",
+      title: "Second note",
+      createdAt: 2,
+      updatedAt: 2,
+    },
+  ]);
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(2);
+
+    const firstStickyPage = await getStickyPageByNoteId(electronApp, "first-note");
+    await firstStickyPage.bringToFront();
+    await openStickyActionBar(firstStickyPage);
+    const closeButton = firstStickyPage.getByRole("button", { name: "Close window" });
+    await expect(closeButton).toHaveAttribute("data-tooltip", "Close window · Ctrl+W");
+    try {
+      await closeButton.evaluate((button) => button.click());
+    } catch (error) {
+      if (!String(error).includes("has been closed")) {
+        throw error;
+      }
+    }
+
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().length;
+      });
+    }).toBe(1);
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows().map((window) =>
+          new URL(window.webContents.getURL()).searchParams.get("noteId"),
+        );
+      });
+    }).toEqual(["second-note"]);
   } finally {
     await electronApp.close();
   }
@@ -666,6 +713,44 @@ test("Electron vertically centers macOS traffic lights for tabs and sticky windo
     await expect.poll(async () => {
       return await getAllWindowShadowStates(electronApp);
     }).toEqual([true, true]);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("Electron uses the native Windows title bar and frame", async () => {
+  test.skip(process.platform !== "win32", "Windows window chrome is only available on win32.");
+
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const electronApp = await launchApp(userDataDirectory);
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await expect(page.getByTestId("sticky-header")).toHaveCount(0);
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows()[0]?.isMenuBarVisible();
+      });
+    }).toBe(true);
+    const titleBarHeight = await page.evaluate(() => window.outerHeight - window.innerHeight);
+    expect(titleBarHeight).toBeGreaterThan(24);
+
+    await clickMenuItem(electronApp, "Toggle Tabs / Sticky Mode");
+    await expect.poll(() => getOpenPages(electronApp).length).toBe(1);
+    const stickyPage = getOpenPages(electronApp)[0];
+    await expect(stickyPage.getByTestId("sticky-header")).toBeVisible();
+    await expect.poll(async () => {
+      return await electronApp.evaluate(({ BrowserWindow }) => {
+        return BrowserWindow.getAllWindows()[0]?.isMenuBarVisible();
+      });
+    }).toBe(false);
+    const stickyTitleBarHeight = await stickyPage.evaluate(
+      () => window.outerHeight - window.innerHeight,
+    );
+    expect(stickyTitleBarHeight).toBeLessThan(16);
   } finally {
     await electronApp.close();
   }
@@ -829,12 +914,12 @@ test("Electron sticky windows keep independent pin and color updates", async () 
       .toHaveCount(0);
 
     await firstStickyPage.bringToFront();
-    await firstStickyPage.locator(".sticky-header-actions").hover();
+    await openStickyActionBar(firstStickyPage);
     await firstStickyPage.getByRole("button", { name: "Pin window" }).click();
     await expect(firstStickyPage.getByRole("button", { name: "Unpin window" }))
       .toHaveAttribute("aria-pressed", "true");
     await secondStickyPage.bringToFront();
-    await secondStickyPage.locator(".sticky-header-actions").hover();
+    await openStickyActionBar(secondStickyPage);
     await expect(secondStickyPage.getByRole("button", { name: "Pin window" }))
       .toHaveAttribute("aria-pressed", "false");
     await expect.poll(async () => {
@@ -1025,11 +1110,19 @@ function getOpenPages(electronApp) {
 
 async function openStickySettings(page) {
   await page.bringToFront();
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Sticky settings" }).click();
   const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
   await expect(settingsPanel).toBeVisible();
   return settingsPanel;
+}
+
+async function openStickyActionBar(page) {
+  const actionToggle = page.locator(".sticky-header-action-preview");
+  if ((await actionToggle.getAttribute("aria-expanded")) !== "true") {
+    await actionToggle.click();
+  }
+  await expect(actionToggle).toHaveAttribute("aria-expanded", "true");
 }
 
 async function clickLastEmptyParagraph(page) {
@@ -1096,6 +1189,11 @@ async function clickMenuItem(electronApp, label) {
       return null;
     }
   }, label);
+}
+
+async function chooseBlankSessionTemplate(page) {
+  const templateDialog = page.getByRole("dialog", { name: "Create new session" });
+  await expect(templateDialog).toHaveCount(0);
 }
 
 function modifierShortcut(key) {

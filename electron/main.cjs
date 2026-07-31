@@ -1,4 +1,5 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
@@ -50,8 +51,21 @@ let quitting = false;
 const manuallyClosedStickyNoteIds = new Set();
 let installedFontsPromise = null;
 
+if (isWsl()) {
+  // WSL's X/Wayland bridge can tear down Electron's GPU process between launches.
+  app.disableHardwareAcceleration();
+}
+
 if (userDataDirOverride) {
   app.setPath("userData", userDataDirOverride);
+}
+
+function isWsl() {
+  return (
+    process.platform === "linux" &&
+    (Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) ||
+      /microsoft|wsl/i.test(os.release()))
+  );
 }
 
 function createWindow(note, options = {}) {
@@ -66,11 +80,7 @@ function createWindow(note, options = {}) {
     minWidth: isPrimary ? TABS_MIN_WIDTH : STICKY_MIN_WIDTH,
     minHeight: isPrimary ? TABS_MIN_HEIGHT : STICKY_MIN_HEIGHT,
     title: note.title,
-    frame: false,
-    titleBarStyle: "hidden",
-    trafficLightPosition,
-    transparent: true,
-    backgroundColor: "#00000000",
+    ...getWindowChromeOptions(isPrimary, trafficLightPosition),
     hasShadow: true,
     alwaysOnTop: note.alwaysOnTop,
     icon: ICON_PNG_PATH,
@@ -83,6 +93,9 @@ function createWindow(note, options = {}) {
     },
   });
   window.setWindowButtonVisibility?.(true);
+  if (process.platform === "win32") {
+    window.setMenuBarVisibility(isPrimary);
+  }
   applyWindowChrome(window, isPrimary);
 
   windows.set(window.id, {
@@ -131,6 +144,35 @@ function createWindow(note, options = {}) {
   return window;
 }
 
+function getWindowChromeOptions(isPrimary, trafficLightPosition) {
+  if (process.platform === "win32") {
+    if (!isPrimary) {
+      return {
+        // Sticky windows keep their compact in-app header instead of a second
+        // Windows caption bar.
+        frame: false,
+        transparent: false,
+        backgroundColor: "#f7f7f5",
+      };
+    }
+
+    return {
+      // Keep Windows responsible for caption buttons, resize borders, and shadows.
+      frame: true,
+      transparent: false,
+      backgroundColor: "#f7f7f5",
+    };
+  }
+
+  return {
+    frame: false,
+    titleBarStyle: "hidden",
+    trafficLightPosition,
+    transparent: true,
+    backgroundColor: "#00000000",
+  };
+}
+
 function resolveTrafficLightPosition(isPrimary) {
   return {
     x: TRAFFIC_LIGHT_X,
@@ -147,7 +189,9 @@ function applyTrafficLightPosition(window, isPrimary) {
 
 function applyWindowChrome(window, isPrimary) {
   window.setHasShadow?.(true);
-  applyTrafficLightPosition(window, isPrimary);
+  if (process.platform === "darwin") {
+    applyTrafficLightPosition(window, isPrimary);
+  }
 }
 
 function createNewNoteWindow() {
@@ -162,8 +206,30 @@ function createNewNoteWindow() {
   return window;
 }
 
-function createNoteForLayoutMode(bounds, layoutMode = store.getLayoutMode()) {
-  const options = {};
+function requestNewNoteWindow() {
+  if (store.getLayoutMode() !== "tabs") {
+    return createNewNoteWindow();
+  }
+
+  const window = getCommandTargetWindow();
+  if (!window || window.isDestroyed()) {
+    return createNewNoteWindow();
+  }
+
+  window.show();
+  window.focus();
+  window.webContents.send("notes:create-requested");
+  return window;
+}
+
+function createNoteForLayoutMode(
+  bounds,
+  layoutMode = store.getLayoutMode(),
+  creationOptions = {},
+) {
+  const options = {
+    template: creationOptions?.template === "default" ? "default" : "blank",
+  };
   if (layoutMode === "sticky") {
     options.theme = createDefaultStickyTheme(store.listNotes().length);
   }
@@ -494,6 +560,49 @@ function restoreTabsModeAfterLastStickyWindowClosed(activeNoteId) {
   return true;
 }
 
+function recreateWindowsForLayoutMode(activeNoteId, options = {}) {
+  const previousEntries = [...windows.values()];
+  const notes = store.listNotes();
+  const layoutMode = store.getLayoutMode();
+  const nextWindows = [];
+
+  // `frame` is immutable in Electron. Open replacements before tearing down
+  // the old windows so Windows does not treat a layout transition as app exit.
+  for (const entry of previousEntries) {
+    entry.closingProgrammatically = true;
+    entry.primary = false;
+    persistWindowBounds(entry.window);
+  }
+
+  if (layoutMode === "sticky") {
+    for (const note of notes) {
+      nextWindows.push(createWindow(note));
+    }
+    if (options.arrangeStickyWindows) {
+      arrangeStickyWindows(notes);
+    }
+  } else {
+    const primaryNote = getMainTabsNote(activeNoteId);
+    if (primaryNote) {
+      nextWindows.push(createWindow(primaryNote, { primary: true }));
+    }
+
+    for (const note of notes) {
+      if (note.detached && note.id !== primaryNote?.id) {
+        nextWindows.push(createWindow(note));
+      }
+    }
+  }
+
+  for (const entry of previousEntries) {
+    if (!entry.window.isDestroyed()) {
+      entry.window.destroy();
+    }
+  }
+
+  return nextWindows;
+}
+
 function syncWindowsForLayoutMode(activeNoteId, options = {}) {
   const notes = store.listNotes();
   const noteIds = new Set(notes.map((note) => note.id));
@@ -589,11 +698,14 @@ async function updateLayoutMode(layoutMode, options = {}) {
       manuallyClosedStickyNoteIds.clear();
     }
     buildMenu();
-    const targetWindows = syncWindowsForLayoutMode(activeNoteId, {
+    const windowSyncOptions = {
       reopenClosedStickyWindows: nextLayoutMode === "sticky",
       arrangeStickyWindows:
         previousLayoutMode !== "sticky" && nextLayoutMode === "sticky",
-    });
+    };
+    const targetWindows = isChangingMode && process.platform === "win32"
+      ? recreateWindowsForLayoutMode(activeNoteId, windowSyncOptions)
+      : syncWindowsForLayoutMode(activeNoteId, windowSyncOptions);
     broadcastLayoutMode(nextLayoutMode);
     broadcastNotesChanged();
     await waitForWindowsReadyToShow(targetWindows ?? []);
@@ -667,8 +779,11 @@ function buildMenu() {
         { role: "about" },
         { type: "separator" },
         {
-          label: "Preferences",
-          accelerator: getMenuAccelerator("preferences"),
+          label: getMenuItemLabel("Preferences", "preferences"),
+          accelerator:
+            process.platform === "win32"
+              ? undefined
+              : getMenuAccelerator("preferences"),
           click: openPreferences,
         },
         { type: "separator" },
@@ -685,12 +800,12 @@ function buildMenu() {
         {
           label: "New Tab",
           accelerator: isTabsMode ? getMenuAccelerator("newSession") : undefined,
-          click: createNewNoteWindow,
+          click: requestNewNoteWindow,
         },
         {
           label: "New Note",
           accelerator: isTabsMode ? getMenuAccelerator("newNote") : undefined,
-          click: createNewNoteWindow,
+          click: requestNewNoteWindow,
         },
         { type: "separator" },
         {
@@ -715,6 +830,12 @@ function buildMenu() {
     {
       label: "View",
       submenu: [
+        {
+          label: "Toggle Table of Contents",
+          accelerator: getMenuAccelerator("toggleTableOfContents"),
+          click: toggleTableOfContents,
+        },
+        { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
@@ -756,7 +877,21 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function getMenuAccelerator(commandId) {
+function toggleTableOfContents() {
+  const editorPreferences = store?.getEditorPreferences?.();
+  if (!editorPreferences) {
+    return;
+  }
+
+  const nextEditorPreferences = store.updateEditorPreferences({
+    ...editorPreferences,
+    showTableOfContents: !editorPreferences.showTableOfContents,
+  });
+  buildMenu();
+  broadcastEditorPreferences(nextEditorPreferences);
+}
+
+function getMenuShortcut(commandId) {
   const editorPreferences = store?.getEditorPreferences?.();
   if (editorPreferences?.keyboardShortcutEnabled?.[commandId] === false) {
     return undefined;
@@ -766,7 +901,36 @@ function getMenuAccelerator(commandId) {
     editorPreferences?.keyboardShortcuts?.[commandId] ??
     DEFAULT_KEYBOARD_SHORTCUTS[commandId];
 
-  return electronAcceleratorForShortcut(shortcut);
+  return typeof shortcut === "string" && shortcut.trim() ? shortcut : undefined;
+}
+
+function getMenuAccelerator(commandId) {
+  const shortcut = getMenuShortcut(commandId);
+  return shortcut ? electronAcceleratorForShortcut(shortcut) : undefined;
+}
+
+function getMenuItemLabel(label, commandId) {
+  if (process.platform !== "win32") {
+    return label;
+  }
+
+  const shortcut = getMenuShortcut(commandId);
+  return shortcut ? `${label}\t${formatWindowsShortcutLabel(shortcut)}` : label;
+}
+
+function formatWindowsShortcutLabel(shortcut) {
+  return shortcut
+    .split("+")
+    .map((token) => {
+      if (token === "Mod" || token === "CommandOrControl") {
+        return "Ctrl";
+      }
+      if (token === "Comma" || token === "comma") {
+        return ",";
+      }
+      return token;
+    })
+    .join("+");
 }
 
 function electronAcceleratorForShortcut(shortcut) {
@@ -871,12 +1035,13 @@ function installIpcHandlers() {
     return store.listTrash();
   });
 
-  ipcMain.handle("notes:create", (event) => {
+  ipcMain.handle("notes:create", (event, creationOptions) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const layoutMode = store.getLayoutMode();
     const note = createNoteForLayoutMode(
       window?.getBounds() ?? nextWindowBounds(),
       layoutMode,
+      creationOptions,
     );
     if (layoutMode === "sticky") {
       createWindow(note);
@@ -1190,6 +1355,16 @@ function installIpcHandlers() {
       }
     }
     return Boolean(alwaysOnTop);
+  });
+
+  ipcMain.handle("window:close-current", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || window.isDestroyed()) {
+      return false;
+    }
+
+    window.close();
+    return true;
   });
 
   ipcMain.handle("window:move-by", (event, payload) => {

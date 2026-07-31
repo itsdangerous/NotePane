@@ -171,6 +171,7 @@ const NOTE_PANE_TEMPLATE_BLOCKS = [
     type: "paragraph",
   },
 ];
+const NOTE_PANE_TEMPLATE_BLOCKS_JSON = JSON.stringify(NOTE_PANE_TEMPLATE_BLOCKS);
 
 const EMPTY_BLOCKS = [
   {
@@ -245,6 +246,7 @@ const DEFAULT_KEYBOARD_SHORTCUTS = {
   moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
   toggleLayoutMode: "Mod+Shift+M",
+  toggleTableOfContents: "Mod+Shift+O",
   toggleThemeMode: "Mod+Shift+L",
   exportPdf: "Mod+Shift+E",
   preferences: "Mod+,",
@@ -660,14 +662,16 @@ function App() {
     [notes],
   );
 
-  const createSidebarNote = useCallback(async () => {
+  const createSidebarNote = useCallback(async (options = {}) => {
+    const template = options?.template === "default" ? "default" : "blank";
     const nextNote = electronApi
-      ? await electronApi.createNote()
+      ? await electronApi.createNote({ template })
       : {
           id: crypto.randomUUID(),
-          title: DEFAULT_TITLE,
+          title: template === "default" ? "NotePane" : DEFAULT_TITLE,
           titleManuallyEdited: false,
-          blocksJSON: null,
+          blocksJSON:
+            template === "default" ? NOTE_PANE_TEMPLATE_BLOCKS_JSON : null,
           markdown: "",
           theme: DEFAULT_THEME,
           seedDemoContent: false,
@@ -1172,6 +1176,13 @@ function StickyEditor({
   const [preferencesInitialPage, setPreferencesInitialPage] = useState("general");
   const [isStickySettingsOpen, setIsStickySettingsOpen] = useState(false);
   const [isStickyTrashConfirmOpen, setIsStickyTrashConfirmOpen] = useState(false);
+  const [isStickyActionBarOpen, setIsStickyActionBarOpen] = useState(false);
+  const [isDefaultTemplateSuggestionVisible, setIsDefaultTemplateSuggestionVisible] =
+    useState(
+      () =>
+        effectiveLayoutMode === "tabs" &&
+        isEmptySessionDocument(initialEditorContent),
+    );
   const [pendingSessionTrashNote, setPendingSessionTrashNote] = useState(null);
   const [sessionTabMenu, setSessionTabMenu] = useState(null);
   const [sessionColorPanelNoteId, setSessionColorPanelNoteId] = useState(null);
@@ -1213,6 +1224,8 @@ function StickyEditor({
     effectiveLayoutMode === "tabs" &&
     showTableOfContents &&
     tableOfContentsEntries.length > 0;
+  const shouldRenderChromeHeader =
+    effectiveLayoutMode === "sticky" || !isWindowsRuntime();
 
   useEffect(() => {
     document.body.classList.toggle("theme-dark", appThemeMode === "dark");
@@ -1310,6 +1323,7 @@ function StickyEditor({
     if (effectiveLayoutMode !== "sticky") {
       setIsStickySettingsOpen(false);
       setIsStickyTrashConfirmOpen(false);
+      setIsStickyActionBarOpen(false);
     }
     if (effectiveLayoutMode !== "tabs") {
       setPendingSessionTrashNote(null);
@@ -1345,6 +1359,9 @@ function StickyEditor({
       }
 
       setSessionTabMenu(null);
+      if (!target.closest(".sticky-header-actions")) {
+        setIsStickyActionBarOpen(false);
+      }
 
       if (
         !target.closest("[data-testid='sticky-editor-surface']")
@@ -1452,6 +1469,9 @@ function StickyEditor({
   }, [editor]);
 
   const handleEditorChange = useCallback(() => {
+    if (!isEmptySessionDocument(editor.document)) {
+      setIsDefaultTemplateSuggestionVisible(false);
+    }
     updateAutomaticTitleFromBlocks(editor.document);
     refreshTableOfContents();
     scheduleSave();
@@ -1591,6 +1611,13 @@ function StickyEditor({
     [normalizedEditorPreferences, updateGlobalEditorPreferences],
   );
 
+  const toggleTableOfContents = useCallback(() => {
+    updateGlobalEditorPreferences({
+      ...normalizedEditorPreferences,
+      showTableOfContents: !showTableOfContents,
+    });
+  }, [normalizedEditorPreferences, showTableOfContents, updateGlobalEditorPreferences]);
+
   const adjustEditorFontScale = useCallback(
     (direction) => {
       updateEditorFontScale(
@@ -1631,6 +1658,25 @@ function StickyEditor({
       focusLastEditorBlock(editor);
     });
   }, [editor]);
+
+  useEffect(() => {
+    setIsEditorActive(true);
+    const animationFrame = window.requestAnimationFrame(() => {
+      focusLastEditorBlock(editor);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [editor]);
+
+  const applyDefaultTemplate = useCallback(() => {
+    const templateBlocks = JSON.parse(NOTE_PANE_TEMPLATE_BLOCKS_JSON);
+    editor.replaceBlocks(editor.document, templateBlocks);
+    setIsDefaultTemplateSuggestionVisible(false);
+    handleEditorChange();
+    focusEditor();
+  }, [editor, focusEditor, handleEditorChange]);
 
   const useTemplateSession = useCallback(async () => {
     if (!note.seedDemoContent) {
@@ -1685,6 +1731,17 @@ function StickyEditor({
   const openPreferences = useCallback(() => {
     openPreferencesPage("general");
   }, [openPreferencesPage]);
+
+  const requestNewSession = useCallback(() => {
+    setIsColorPanelOpen(false);
+    setIsStickySettingsOpen(false);
+    setIsStickyTrashConfirmOpen(false);
+    setPendingSessionTrashNote(null);
+    setSessionTabMenu(null);
+    setSessionColorPanelNoteId(null);
+    setIsPreferencesWindowOpen(false);
+    void onCreateNote({ template: "blank" });
+  }, [onCreateNote]);
 
   const openTrashPreferences = useCallback(() => {
     openPreferencesPage("trash");
@@ -1755,6 +1812,11 @@ function StickyEditor({
     }
   }, [isPinned, note, onNoteChanged, showExportToast, theme, title]);
 
+  const closeCurrentWindow = useCallback(() => {
+    setIsStickyActionBarOpen(false);
+    void electronApi?.closeCurrentWindow?.();
+  }, []);
+
   const exportNote = useCallback(async () => {
     if (!electronApi) {
       showExportToast("PDF export is available in the desktop app.", "error");
@@ -1788,6 +1850,10 @@ function StickyEditor({
   useEffect(() => {
     return electronApi?.onOpenPreferences?.(openPreferences);
   }, [openPreferences]);
+
+  useEffect(() => {
+    return electronApi?.onCreateNoteRequested?.(requestNewSession);
+  }, [requestNewSession]);
 
   useEffect(() => {
     const handlePreferencesShortcut = (event) => {
@@ -1824,6 +1890,12 @@ function StickyEditor({
       if (matchesEnabledKeyboardShortcut(event, "toggleLayoutMode")) {
         event.preventDefault();
         toggleLayoutMode();
+        return;
+      }
+
+      if (matchesEnabledKeyboardShortcut(event, "toggleTableOfContents")) {
+        event.preventDefault();
+        toggleTableOfContents();
         return;
       }
 
@@ -1886,7 +1958,7 @@ function StickyEditor({
         effectiveLayoutMode === "tabs"
       ) {
         event.preventDefault();
-        void onCreateNote();
+        requestNewSession();
       }
     };
 
@@ -1902,10 +1974,11 @@ function StickyEditor({
     note.id,
     onAppThemeModeChanged,
     onAttachNote,
-    onCreateNote,
     adjustEditorFontScale,
     exportNote,
     focusEditor,
+    requestNewSession,
+    toggleTableOfContents,
     toggleLayoutMode,
   ]);
 
@@ -1915,6 +1988,7 @@ function StickyEditor({
       !isPreferencesWindowOpen &&
       !isStickySettingsOpen &&
       !isStickyTrashConfirmOpen &&
+      !isStickyActionBarOpen &&
       !pendingSessionTrashNote &&
       !sessionTabMenu &&
       !sessionColorPanelNoteId
@@ -1929,6 +2003,7 @@ function StickyEditor({
         setIsPreferencesWindowOpen(false);
         setIsStickySettingsOpen(false);
         setIsStickyTrashConfirmOpen(false);
+        setIsStickyActionBarOpen(false);
         setPendingSessionTrashNote(null);
         setSessionTabMenu(null);
         setSessionColorPanelNoteId(null);
@@ -1944,6 +2019,7 @@ function StickyEditor({
     isPreferencesWindowOpen,
     isStickySettingsOpen,
     isStickyTrashConfirmOpen,
+    isStickyActionBarOpen,
     pendingSessionTrashNote,
     sessionColorPanelNoteId,
     sessionTabMenu,
@@ -2912,14 +2988,20 @@ function StickyEditor({
       data-theme-mode={appThemeMode}
       data-layout-mode={effectiveLayoutMode}
     >
-      <header
-        className="sticky-header"
-        data-testid="sticky-header"
-        data-window-drag-handle={effectiveLayoutMode === "sticky" ? "true" : undefined}
-        onPointerDown={startHeaderWindowDrag}
-      >
+      {shouldRenderChromeHeader && (
+        <header
+          className="sticky-header"
+          data-testid="sticky-header"
+          data-window-drag-handle={effectiveLayoutMode === "sticky" ? "true" : undefined}
+          onPointerDown={startHeaderWindowDrag}
+        >
         <div className="sticky-drag-strip" aria-hidden="true" />
-        <div className="sticky-header-actions" aria-label="Sticky controls">
+        <div
+          className={`sticky-header-actions${
+            isStickyActionBarOpen ? " is-open" : ""
+          }`}
+          aria-label="Sticky controls"
+        >
           {effectiveLayoutMode === "sticky" && (
             <>
               <div className="sticky-header-action-list">
@@ -2946,14 +3028,38 @@ function StickyEditor({
                   onClick={requestMoveCurrentStickyNoteToTrash}
                 />
               </div>
-              <div className="sticky-header-action-preview" aria-hidden="true">
-                {isPinned && (
-                  <span className="sticky-pin-status">
-                    <PinIcon pinned={isPinned} />
-                  </span>
+              <button
+                type="button"
+                className="sticky-header-action-preview has-tooltip"
+                aria-label={
+                  isStickyActionBarOpen
+                    ? "Close window"
+                    : "Show sticky actions"
+                }
+                aria-expanded={isStickyActionBarOpen}
+                data-tooltip={
+                  isStickyActionBarOpen
+                    ? formatShortcutTooltip(
+                        "Close window",
+                        getEnabledShortcut("closeWindow"),
+                      )
+                    : "Show sticky actions"
+                }
+                onMouseDown={preventFocusLoss}
+                onClick={() => {
+                  if (isStickyActionBarOpen) {
+                    closeCurrentWindow();
+                    return;
+                  }
+                  setIsStickyActionBarOpen(true);
+                }}
+              >
+                {isStickyActionBarOpen ? (
+                  <X className="notepane-action-icon" data-icon-tone="delete" />
+                ) : (
+                  <EllipsisIcon />
                 )}
-                <EllipsisIcon />
-              </div>
+              </button>
             </>
           )}
           {note.detached && normalizedLayoutMode === "tabs" && (
@@ -2972,7 +3078,8 @@ function StickyEditor({
             </button>
           )}
         </div>
-      </header>
+        </header>
+      )}
       <div className="sticky-body">
         {effectiveLayoutMode === "tabs" && (
           <aside
@@ -3193,7 +3300,7 @@ function StickyEditor({
                   getEnabledShortcut("newSession"),
                 )}
                 onMouseDown={preventFocusLoss}
-                onClick={() => void onCreateNote()}
+                onClick={requestNewSession}
               >
                 <Plus
                   className="session-add-icon"
@@ -3285,6 +3392,19 @@ function StickyEditor({
               <Check className="template-use-icon" aria-hidden="true" />
               <span>Use this template</span>
             </button>
+          )}
+          {isDefaultTemplateSuggestionVisible && (
+            <div className="default-template-suggestion" role="status">
+              <span>Start with the default template?</span>
+              <button
+                type="button"
+                onMouseDown={preventFocusLoss}
+                onClick={applyDefaultTemplate}
+              >
+                <Plus className="default-template-suggestion-icon" aria-hidden="true" />
+                Add default template
+              </button>
+            </div>
           )}
           <BlockNoteView
             editor={editor}
@@ -3793,6 +3913,9 @@ function EditorPreferencesSection({
           <div className="preference-setting-title">Table of contents</div>
           <div className="preferences-section-description">
             Show the right rail from heading levels in tab mode.
+            Toggle it from View or {getShortcutLabel(
+              normalizedEditorPreferences.keyboardShortcuts.toggleTableOfContents,
+            )}.
           </div>
         </div>
         <PreferenceToggleSwitch
@@ -3817,6 +3940,7 @@ const PREFERENCE_SHORTCUT_COMMANDS = [
   { id: "moveTabRight", label: "Move tab right" },
   { id: "toggleSidebar", label: "Toggle sidebar" },
   { id: "toggleLayoutMode", label: "Toggle tabs / sticky" },
+  { id: "toggleTableOfContents", label: "Toggle table of contents" },
   { id: "toggleThemeMode", label: "Toggle light / dark" },
   { id: "exportPdf", label: "Export PDF" },
   { id: "preferences", label: "Preferences" },
@@ -5918,7 +6042,7 @@ function getShortcutLabel(shortcut) {
   }
 
   const keyLabel = getShortcutKeyLabel(parsedShortcut.key);
-  if (!isWindowsRuntime()) {
+  if (isAppleRuntime()) {
     return [
       parsedShortcut.mod ? "⌘" : "",
       parsedShortcut.alt ? "⌥" : "",
@@ -5946,13 +6070,15 @@ function getLegacyShortcutLabel(keys) {
     return "";
   }
 
-  if (!isWindowsRuntime()) {
+  if (isAppleRuntime()) {
     return `⌘${normalizedKeys}`;
   }
 
   return `Ctrl+${normalizedKeys
     .replaceAll("⌥", "Alt+")
-    .replaceAll("⇧", "Shift+")}`;
+    .replaceAll("⇧", "Shift+")
+    .replaceAll("Comma", ",")
+    .replaceAll("comma", ",")}`;
 }
 
 function getShortcutKeyLabel(key) {
@@ -5964,6 +6090,7 @@ function getShortcutKeyLabel(key) {
     Enter: "↩",
     Escape: "Esc",
     Space: "Space",
+    Comma: ",",
     "=": "+",
   };
 
@@ -6245,13 +6372,21 @@ function isShortcutRecorderTarget(target) {
 }
 
 function isWindowsRuntime() {
+  return electronApi?.platform === "win32";
+}
+
+function isAppleRuntime() {
+  if (electronApi?.platform) {
+    return electronApi.platform === "darwin";
+  }
+
   if (typeof navigator === "undefined") {
     return false;
   }
 
-  const platform = navigator.platform ?? "";
-  const userAgent = navigator.userAgent ?? "";
-  return /^win/i.test(platform) || /\bwindows\b/i.test(userAgent);
+  return /mac|iphone|ipad|ipod/i.test(
+    `${navigator.platform ?? ""} ${navigator.userAgent ?? ""}`,
+  );
 }
 
 const FLOATING_EDITOR_MENU_MARGIN = 8;
@@ -8701,6 +8836,29 @@ function isEmptyEditorSurfacePointer(event) {
   }
 
   return Boolean(target.closest("[data-testid='sticky-editor-surface']"));
+}
+
+function isEmptySessionDocument(blocks) {
+  if (!Array.isArray(blocks) || blocks.length !== 1) {
+    return false;
+  }
+
+  const [block] = blocks;
+  if (block?.type !== "paragraph" || block.children?.length > 0) {
+    return false;
+  }
+
+  if (block.content == null) {
+    return true;
+  }
+
+  if (typeof block.content === "string") {
+    return block.content.trim().length === 0;
+  }
+
+  return Array.isArray(block.content) && block.content.every(
+    (item) => item?.type === "text" && !item.text?.trim(),
+  );
 }
 
 function focusLastEditorBlock(editor) {

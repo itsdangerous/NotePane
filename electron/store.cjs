@@ -159,6 +159,7 @@ const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
   moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
   toggleLayoutMode: "Mod+Shift+M",
+  toggleTableOfContents: "Mod+Shift+O",
   toggleThemeMode: "Mod+Shift+L",
   exportPdf: "Mod+Shift+E",
   preferences: "Mod+,",
@@ -330,13 +331,14 @@ class StickyStore {
 
   createNote(bounds, options = {}) {
     const now = Date.now();
+    const useDefaultTemplate = options?.template === "default";
     const seedDemoContent = Boolean(options?.seedDemoContent);
     const editorPreferences = this.getEditorPreferences();
     const note = normalizeNote({
       id: randomUUID(),
       title: DEFAULT_NOTE_TITLE,
       titleManuallyEdited: false,
-      blocksJSON: null,
+      blocksJSON: useDefaultTemplate ? NOTE_PANE_TEMPLATE_BLOCKS_JSON : null,
       markdown: "",
       bounds,
       theme: options?.theme ?? DEFAULT_NOTE_THEME,

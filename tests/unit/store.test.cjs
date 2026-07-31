@@ -77,6 +77,24 @@ test("creates a note with an optional initial theme", () => {
   });
 });
 
+test("creates an applied default template when requested", () => {
+  const directory = createTemporaryDirectory();
+  const store = new StickyStore(directory);
+  const note = store.createNote(
+    { width: 900, height: 700 },
+    { template: "default" },
+  );
+
+  assert.equal(note.title, "NotePane");
+  assert.equal(note.seedDemoContent, false);
+  assert.match(note.blocksJSON, /Launch checklist/);
+
+  const reloaded = new StickyStore(directory).getNote(note.id);
+  assert.equal(reloaded.title, "NotePane");
+  assert.equal(reloaded.seedDemoContent, false);
+  assert.match(reloaded.blocksJSON, /Workspace modes/);
+});
+
 test("marks only explicitly seeded notes for demo content", () => {
   const directory = createTemporaryDirectory();
   const store = new StickyStore(directory);

@@ -7,7 +7,14 @@ test.beforeEach(async ({ page }) => {
 
 test("starts with a blank first session", async ({ page }) => {
   await expect(page.getByTestId("sticky-shell")).toBeVisible();
-  await expect(page.getByTestId("sticky-header")).toBeVisible();
+  const isWindows = await page.evaluate(
+    () => window.blocknoteSticky?.platform === "win32",
+  );
+  if (isWindows) {
+    await expect(page.getByTestId("sticky-header")).toHaveCount(0);
+  } else {
+    await expect(page.getByTestId("sticky-header")).toBeVisible();
+  }
   await expect(page.locator("[aria-label='NotePane wordmark']")).toBeVisible();
   await expect(page.getByTestId("session-sidebar").locator("[aria-label='NotePane wordmark']"))
     .toBeVisible();
@@ -19,6 +26,27 @@ test("starts with a blank first session", async ({ page }) => {
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expect(page.getByRole("tab").first()).toHaveAccessibleName(/Untitled/);
   await expect(page.getByRole("table")).toHaveCount(0);
+});
+
+test("offers the default template inline for every new session", async ({ page }) => {
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("dialog", { name: "Create new session" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add default template" })).toBeVisible();
+  await expectEditorToBeFocused(page);
+
+  await page.getByRole("button", { name: "Add default template" }).click();
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("button", { name: "Add default template" })).toHaveCount(0);
+  await expectEditorToBeFocused(page);
+
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("tab")).toHaveCount(3);
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add default template" })).toBeVisible();
+  await expectEditorToBeFocused(page);
 });
 
 test("renders the NotePane template when requested", async ({ page }) => {
@@ -213,7 +241,7 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
     blockNoteColorSchemes: expect.arrayContaining(["dark"]),
   });
 
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
@@ -262,7 +290,7 @@ test("changes editor font size globally with shortcuts", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Editor typography" }))
     .toHaveCount(0);
 
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
@@ -369,7 +397,7 @@ test("changes editor typography globally from preferences", async ({ page }) => 
     sidebarWidth: before.sidebarWidth,
   });
 
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => getEditorScaleMetrics(page)).toMatchObject({
@@ -453,6 +481,11 @@ test("shows table of contents in tab mode only when enabled from preferences", a
     name: /Jump to Launch checklist, heading level 1/,
   })).toBeVisible();
 
+  await page.keyboard.press(modifierShortcut("Shift+O"));
+  await expect(tableOfContents).toHaveCount(0);
+  await page.keyboard.press(modifierShortcut("Shift+O"));
+  await expect(tableOfContents).toBeVisible();
+
   await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
@@ -460,7 +493,7 @@ test("shows table of contents in tab mode only when enabled from preferences", a
   );
   await expect(page.getByTestId("editor-toc")).toHaveCount(0);
 
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
@@ -491,7 +524,7 @@ test("keeps tab and command select-all outside the editor from moving chrome foc
 });
 
 test("selects all content when the document only has a toggle list block", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await clickLastEmptyParagraph(page);
 
@@ -673,7 +706,7 @@ test("supports light/dark mode and readable sidebar tab background customization
   await page.keyboard.press("Escape");
   await expect(sessionColorPanel).toHaveCount(0);
 
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
 
@@ -737,6 +770,12 @@ test("customizes keyboard shortcuts from preferences", async ({ page }) => {
   const preferencesPanel = page.getByRole("dialog", { name: "Preferences window" });
   await expect(preferencesPanel).toBeVisible();
   await preferencesPanel.getByRole("tab", { name: "Shortcuts" }).click();
+
+  const preferencesShortcut = preferencesPanel.getByRole("button", {
+    name: "Shortcut for Preferences",
+  });
+  await expect(preferencesShortcut).toContainText(",");
+  await expect(preferencesShortcut).not.toContainText("Comma");
 
   const moveTabLeftShortcut = preferencesPanel.getByRole("button", {
     name: "Shortcut for Move tab left",
@@ -848,20 +887,38 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
     actionListOpacity: "0",
     actionListPointerEvents: "none",
     previewIconClass: expect.stringContaining("lucide-ellipsis"),
+    previewActionLabel: "Show sticky actions",
     previewOpacity: "1",
+    previewRightGap: 7,
+    previewWidth: 24,
     previewPinCount: 0,
   });
 
   await page.locator(".sticky-header-actions").hover();
+  await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
+    actionListOpacity: "0",
+    actionListPointerEvents: "none",
+    previewActionLabel: "Show sticky actions",
+    previewOpacity: "1",
+    previewRightGap: 7,
+    previewWidth: 24,
+  });
+
+  await openStickyActionBar(page);
   await expect(stickyPinButton).toBeVisible();
   await expect(page.getByRole("button", { name: "Export PDF" })).toBeVisible();
   await expect(stickyModeButton).toBeVisible();
   await expect(stickySettingsButton).toBeVisible();
   await expect(stickyTrashButton).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close window" })).toBeVisible();
   await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
     actionListOpacity: "1",
     actionListPointerEvents: "auto",
-    previewOpacity: "0",
+    previewActionLabel: "Close window",
+    previewIconClass: expect.stringContaining("lucide-x"),
+    previewOpacity: "0.72",
+    previewRightGap: 7,
+    previewWidth: 24,
   });
 
   await expect.poll(async () => await page.evaluate(() => {
@@ -873,6 +930,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
     const modeButton = document.querySelector(".sticky-header-actions .layout-mode-button");
     const modeIcon = modeButton.querySelector(".notepane-action-icon");
     const headerActions = document.querySelector(".sticky-header-actions");
+    const actionPreview = headerActions.querySelector(".sticky-header-action-preview");
     const headerActionButtons = [...headerActions.querySelectorAll("button")];
     const shellBefore = getComputedStyle(shell, "::before");
     const headerStyle = getComputedStyle(header);
@@ -915,6 +973,10 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
         Math.round(button.getBoundingClientRect().width)
       ),
       headerActionDisplay: getComputedStyle(headerActions).display,
+      previewRightGap: Math.round(
+        header.getBoundingClientRect().right -
+          actionPreview.getBoundingClientRect().right,
+      ),
       modeIconLayout: modeIcon.getAttribute("data-icon-layout"),
       modeIconWidth: Math.round(modeIcon.getBoundingClientRect().width),
       modeTarget: modeButton.getAttribute("data-layout-mode-target"),
@@ -938,9 +1000,10 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
       "Switch to Tab sessions mode",
       "Sticky settings",
       "Move note to trash",
+      "Close window",
     ],
-    headerActionButtonCount: 5,
-    headerActionButtonWidths: [24, 24, 24, 24, 24],
+    headerActionButtonCount: 6,
+    headerActionButtonWidths: [24, 24, 24, 24, 24, 24],
     headerTitleCount: 0,
     headerTitleFormCount: 0,
     headerBackground: "rgb(255, 248, 217)",
@@ -950,6 +1013,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
     headerPosition: "absolute",
     surfacePaddingTop: "30px",
     headerActionDisplay: "flex",
+    previewRightGap: 7,
     modeIconLayout: "compact",
     modeIconWidth: 16,
     modeTarget: "tabs",
@@ -974,13 +1038,10 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
   ).toBe("rgb(216, 59, 59)");
   await page.mouse.move(120, 120);
   await expect.poll(() => getStickyHeaderActionChrome(page)).toMatchObject({
-    actionListOpacity: "0",
-    previewOpacity: "1",
-    previewPinCount: 1,
-    previewPinFill: "rgb(216, 59, 59)",
-    previewPinState: "pinned",
+    actionListOpacity: "1",
+    previewOpacity: "0.72",
+    previewPinCount: 0,
   });
-  await page.locator(".sticky-header-actions").hover();
   await stickyUnpinButton.click();
   await expect(page.getByRole("button", { name: "Pin window" }))
     .toHaveAttribute("aria-pressed", "false");
@@ -991,7 +1052,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
   await expect(page.getByRole("group", { name: "Editor typography" }))
     .toHaveCount(0);
 
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await stickySettingsButton.click();
   const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
   await expect(settingsPanel).toBeVisible();
@@ -1061,7 +1122,7 @@ test("uses sticky pastel color and carries it back to the session tab", async ({
 
   await page.keyboard.press("Escape");
   await expect(settingsPanel).toHaveCount(0);
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
     "data-layout-mode",
@@ -1084,7 +1145,7 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
 
   await expect(page.getByRole("button", { name: "Show editor tools" }))
     .toHaveCount(0);
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Sticky settings" }).click();
   const settingsPanel = page.getByRole("dialog", { name: "Sticky settings window" });
   await expect(settingsPanel).toBeVisible();
@@ -1123,7 +1184,7 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
   await expectStickyPlaceholderReadable(page);
 
   await page.keyboard.press(modifierShortcut("Shift+L"));
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Sticky settings" }).click();
   await page.getByLabel("HEX sticky color value").fill("ffffff");
   await page.getByLabel("Color opacity").evaluate((input) => {
@@ -1144,6 +1205,45 @@ test("keeps sticky editor chrome readable against dark custom backgrounds", asyn
   await page.keyboard.press("Escape");
   await expectStickyTableChromeReadable(page);
   await expectStickyPlaceholderReadable(page);
+});
+
+test("keeps sticky dark-mode icon tooltips readable", async ({ page }) => {
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "sticky",
+  );
+  await page.keyboard.press(modifierShortcut("Shift+L"));
+
+  await openStickyActionBar(page);
+  await page.getByRole("button", { name: "Sticky settings" }).hover();
+  await expect(page.locator(".adaptive-tooltip")).toBeVisible();
+
+  const tooltipContrast = await page.evaluate(() => {
+    const tooltip = document.querySelector(".adaptive-tooltip");
+    if (!tooltip) {
+      return 0;
+    }
+
+    const parseColor = (value) =>
+      value.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number) ?? [0, 0, 0];
+    const luminance = ([red, green, blue]) => {
+      const channels = [red, green, blue].map((channel) => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      });
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    const style = getComputedStyle(tooltip);
+    const foreground = luminance(parseColor(style.color));
+    const background = luminance(parseColor(style.backgroundColor));
+    return (Math.max(foreground, background) + 0.05) /
+      (Math.min(foreground, background) + 0.05);
+  });
+
+  expect(tooltipContrast).toBeGreaterThanOrEqual(4.5);
 });
 
 async function expectStickyTableChromeReadable(page) {
@@ -1897,16 +1997,17 @@ test("uses transparent chrome-free styles while exporting", async ({ page }) => 
 
 test("creates and switches note sessions from the sidebar", async ({ page }) => {
   await expect(page.getByRole("tab")).toHaveCount(1);
-  await expect(page.getByText(displayShortcutLabel("1"))).toBeVisible();
+  await expect(page.locator(".session-shortcut").first()).toHaveText(/1/);
   await page.keyboard.press(modifierShortcut("T"));
+  await chooseBlankSessionTemplate(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
 
   await expect(page.getByRole("tab")).toHaveCount(3);
   await expect(page.getByRole("tab").nth(2)).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText(displayShortcutLabel("2"))).toBeVisible();
-  await expect(page.getByText(displayShortcutLabel("3"))).toBeVisible();
+  await expect(page.locator(".session-shortcut").nth(1)).toHaveText(/2/);
+  await expect(page.locator(".session-shortcut").nth(2)).toHaveText(/3/);
   await expectNewSessionButtonBelowLastTab(page);
 
   await page.keyboard.press(modifierShortcut("1"));
@@ -1930,7 +2031,8 @@ test("creates and switches note sessions from the sidebar", async ({ page }) => 
 
 test("reorders session tabs with drag-and-drop and keyboard animation", async ({ page }) => {
   await page.keyboard.press(modifierShortcut("T"));
-  await page.getByRole("button", { name: "New session" }).click();
+  await chooseBlankSessionTemplate(page);
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(3);
   await expect(page.locator(".session-tab-row.is-entering")).toHaveCount(0);
 
@@ -2025,7 +2127,7 @@ test("keeps the sidebar compact when creating a session", async ({ page }) => {
     Math.round(element.getBoundingClientRect().width),
   );
 
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
@@ -2037,10 +2139,8 @@ test("keeps the sidebar compact when creating a session", async ({ page }) => {
 });
 
 test("scrolls the sidebar when many session tabs exist", async ({ page }) => {
-  const newSessionButton = page.getByRole("button", { name: "New session" });
-
   for (let index = 0; index < 24; index += 1) {
-    await newSessionButton.click();
+    await createBlankSession(page);
   }
 
   await expect(page.getByRole("tab")).toHaveCount(25);
@@ -2259,7 +2359,7 @@ test("resizes and collapses the sidebar from its right edge", async ({ page }) =
 });
 
 test("keeps the new session control aligned with session rows", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.locator(".session-tab-row.is-entering")).toHaveCount(0);
 
   const metrics = await page.evaluate(() => {
@@ -2351,7 +2451,7 @@ test("keeps the sticky header draggable without title chrome", async ({ page }) 
 test("starts blank and shows the template after closing every tab", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
     .toHaveCount(0);
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
 
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
@@ -2401,7 +2501,7 @@ test("renames a session by double-clicking its tab", async ({ page }) => {
 });
 
 test("derives untitled session names from editor content", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
   await expect(page.getByRole("tab").nth(1)).toHaveAccessibleName(/Untitled/);
 
@@ -2414,7 +2514,7 @@ test("derives untitled session names from editor content", async ({ page }) => {
 });
 
 test("deletes sidebar sessions and keeps the last delete action available", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
 
   await expect(page.getByRole("tab")).toHaveCount(2);
   const secondDeleteButton = page.locator(".session-delete-button").nth(1);
@@ -2610,8 +2710,8 @@ test("wraps long session titles inside the trash confirmation dialog", async ({ 
 });
 
 test("selects trash notes for bulk restore and permanent delete", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
+  await createBlankSession(page);
   await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
     .toHaveCount(3);
   await clickLastEmptyParagraph(page);
@@ -2711,7 +2811,7 @@ test("selects trash notes for bulk restore and permanent delete", async ({ page 
 });
 
 test("moves the current sticky note to trash from the sticky header", async ({ page }) => {
-  await page.getByRole("button", { name: "New session" }).click();
+  await createBlankSession(page);
   await expect(page.getByRole("tab")).toHaveCount(2);
 
   await clickLastEmptyParagraph(page);
@@ -2725,7 +2825,7 @@ test("moves the current sticky note to trash from the sticky header", async ({ p
     "sticky",
   );
 
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Move note to trash" }).click();
   const confirmDialog = page.getByRole("dialog", {
     name: "Move note to trash confirmation",
@@ -2741,12 +2841,12 @@ test("moves the current sticky note to trash from the sticky header", async ({ p
     "sticky",
   );
 
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Move note to trash" }).click();
   await expect(confirmDialog).toBeVisible();
   await confirmDialog.getByRole("button", { name: /Yes, move Sticky trash target to trash/ })
     .click();
-  await page.locator(".sticky-header-actions").hover();
+  await openStickyActionBar(page);
   await page.getByRole("button", { name: "Switch to Tab sessions mode" }).click();
   await expect(page.getByRole("tablist", { name: "Note sessions" }).getByRole("tab"))
     .toHaveCount(1);
@@ -3182,22 +3282,40 @@ async function getStickyHeaderActionChrome(page) {
   return await page.evaluate(() => {
     const actionList = document.querySelector(".sticky-header-action-list");
     const preview = document.querySelector(".sticky-header-action-preview");
-    const previewIcon = preview?.querySelector(".notepane-icon-ellipsis");
+    const previewIcon = preview?.querySelector(".notepane-action-icon");
     const previewPin = preview?.querySelector(".notepane-icon-pin");
     const actionListStyle = actionList ? getComputedStyle(actionList) : null;
     const previewStyle = preview ? getComputedStyle(preview) : null;
     const previewPinStyle = previewPin ? getComputedStyle(previewPin) : null;
+    const header = document.querySelector("[data-testid='sticky-header']");
 
     return {
       actionListOpacity: actionListStyle?.opacity ?? "",
       actionListPointerEvents: actionListStyle?.pointerEvents ?? "",
+      previewActionLabel: preview?.getAttribute("aria-label") ?? "",
       previewIconClass: previewIcon?.getAttribute("class") ?? "",
       previewOpacity: previewStyle?.opacity ?? "",
+      previewRightGap:
+        header && preview
+          ? Math.round(
+              header.getBoundingClientRect().right -
+                preview.getBoundingClientRect().right,
+            )
+          : -1,
+      previewWidth: preview ? Math.round(preview.getBoundingClientRect().width) : -1,
       previewPinCount: previewPin ? 1 : 0,
       previewPinFill: previewPinStyle?.fill ?? "",
       previewPinState: previewPin?.getAttribute("data-pin-state") ?? "",
     };
   });
+}
+
+async function openStickyActionBar(page) {
+  const actionToggle = page.locator(".sticky-header-action-preview");
+  if ((await actionToggle.getAttribute("aria-expanded")) !== "true") {
+    await actionToggle.click();
+  }
+  await expect(actionToggle).toHaveAttribute("aria-expanded", "true");
 }
 
 function expectDistinctIconColors(iconColors) {
@@ -3343,16 +3461,26 @@ async function loadTemplatePreview(page) {
     .toBeVisible();
 }
 
+async function createBlankSession(page) {
+  await page.getByRole("button", { name: "New session" }).click();
+  await chooseBlankSessionTemplate(page);
+}
+
+async function chooseBlankSessionTemplate(page) {
+  const templateDialog = page.getByRole("dialog", { name: "Create new session" });
+  await expect(templateDialog).toHaveCount(0);
+}
+
+async function expectEditorToBeFocused(page) {
+  await expect.poll(() => page.evaluate(() => {
+    return Boolean(document.activeElement?.closest(".bn-editor"));
+  })).toBe(true);
+}
+
 function modifierShortcut(key) {
   return `${process.platform === "darwin" ? "Meta" : "Control"}+${key}`;
 }
 
 function modifierOptionShortcut(key) {
   return `${process.platform === "darwin" ? "Meta" : "Control"}+Alt+${key}`;
-}
-
-function displayShortcutLabel(keys) {
-  return `Ctrl+${String(keys)
-    .replaceAll("⌥", "Alt+")
-    .replaceAll("⇧", "Shift+")}`;
 }

@@ -1632,6 +1632,45 @@ function StickyEditor({
     });
   }, [editor]);
 
+  const useTemplateSession = useCallback(async () => {
+    if (!note.seedDemoContent) {
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    const blocksJSON = JSON.stringify(editor.document);
+    let markdown = "";
+    try {
+      markdown = await editor.blocksToMarkdownLossy(editor.document);
+    } catch {
+      markdown = "";
+    }
+
+    lastSavedBlocksRef.current = blocksJSON;
+    const savedNote = await electronApi?.saveContent({
+      noteId: note.id,
+      blocksJSON,
+      markdown,
+    });
+    const nextNote = savedNote?.id
+      ? savedNote
+      : {
+          ...note,
+          blocksJSON,
+          markdown,
+          seedDemoContent: false,
+          updatedAt: Date.now(),
+        };
+
+    setTitle(getNoteDisplayTitle(nextNote, editor.document));
+    onNoteChanged(nextNote);
+    focusEditor();
+  }, [editor, focusEditor, note, onNoteChanged]);
+
   const openPreferencesPage = useCallback((pageId = "general") => {
     setPreferencesInitialPage(normalizePreferencePageId(pageId));
     setIsColorPanelOpen(false);
@@ -3234,6 +3273,18 @@ function StickyEditor({
               entries={tableOfContentsEntries}
               onSelectEntry={selectTableOfContentsEntry}
             />
+          )}
+          {note.seedDemoContent && (
+            <button
+              type="button"
+              className="template-use-button"
+              aria-label="Use this template"
+              onMouseDown={preventFocusLoss}
+              onClick={() => void useTemplateSession()}
+            >
+              <Check className="template-use-icon" aria-hidden="true" />
+              <span>Use this template</span>
+            </button>
           )}
           <BlockNoteView
             editor={editor}

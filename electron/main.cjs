@@ -1083,14 +1083,16 @@ function installIpcHandlers() {
       return null;
     }
 
-    const previousTitle = store.getNote(resolvedNoteId)?.title;
+    const previousNote = store.getNote(resolvedNoteId);
+    const previousTitle = previousNote?.title;
+    const wasTemplateSeed = previousNote?.seedDemoContent === true;
     const note = store.updateContent({
       noteId: resolvedNoteId,
       blocksJSON: payload?.blocksJSON,
       markdown: payload?.markdown,
     });
 
-    if (note && note.title !== previousTitle) {
+    if (note && (note.title !== previousTitle || wasTemplateSeed)) {
       const window = BrowserWindow.fromWebContents(event.sender);
       if (window && note.title) {
         window.setTitle(note.title);

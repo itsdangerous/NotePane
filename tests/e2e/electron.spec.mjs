@@ -118,6 +118,20 @@ test("Electron shows the NotePane template after the last tab is moved to trash"
     expect(templateNote.seedDemoContent).toBe(true);
     expect(templateNote.title).toBe("NotePane");
     expect(templateNote.blocksJSON).toContain("Launch checklist");
+
+    await expect(page.getByRole("button", { name: "Use this template" }))
+      .toBeVisible();
+    await page.getByRole("button", { name: "Use this template" }).click();
+    await expect(page.getByRole("button", { name: "Use this template" }))
+      .toHaveCount(0);
+    await expect(page.getByTestId("sticky-editor-surface"))
+      .not.toHaveClass(/is-template-session/);
+    await expect.poll(() => {
+      const nextState = JSON.parse(
+        fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+      );
+      return nextState.notes.find((note) => !note.trashedAt)?.seedDemoContent;
+    }).toBe(false);
   } finally {
     await electronApp.close();
   }

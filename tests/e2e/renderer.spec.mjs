@@ -36,6 +36,15 @@ test("renders the NotePane template when requested", async ({ page }) => {
   await expect(page.getByText("Styled Text")).toBeVisible();
   await expect(page.getByTestId("sticky-editor-surface"))
     .toHaveClass(/is-template-session/);
+  await expect(page.getByRole("button", { name: "Use this template" }))
+    .toBeVisible();
+  await page.getByRole("button", { name: "Use this template" }).click();
+  await expect(page.getByRole("button", { name: "Use this template" }))
+    .toHaveCount(0);
+  await expect(page.getByTestId("sticky-editor-surface"))
+    .not.toHaveClass(/is-template-session/);
+  await expect(page.getByRole("heading", { name: "NotePane", exact: true }))
+    .toBeVisible();
 });
 
 test("keeps sticky chrome outside the editable BlockNote surface", async ({ page }) => {
@@ -2378,6 +2387,8 @@ test("starts blank and shows the template after closing every tab", async ({ pag
     .toBeVisible();
   await expect(page.getByTestId("sticky-editor-surface"))
     .toHaveClass(/is-template-session/);
+  await expect(page.getByRole("button", { name: "Use this template" }))
+    .toBeVisible();
 });
 
 test("renames a session by double-clicking its tab", async ({ page }) => {

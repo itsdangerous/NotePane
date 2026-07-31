@@ -2713,6 +2713,47 @@ body.theme-dark,
   padding-bottom: var(--sticky-editor-bottom-gutter);
 }
 
+.template-use-button {
+  position: sticky;
+  z-index: 25;
+  top: 12px;
+  display: flex;
+  width: fit-content;
+  height: 32px;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 18px -46px auto;
+  padding: 0 12px;
+  border: 1px solid var(--chrome-icon-button-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sticky-panel-bg) 94%, transparent);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--sticky-text-color) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 42%, transparent);
+  color: var(--sticky-panel-text);
+  font: 760 11px/1 var(--notepane-ui-font);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    background 130ms ease,
+    border-color 130ms ease,
+    color 130ms ease,
+    transform 130ms ease;
+}
+
+.template-use-button:hover {
+  border-color: var(--chrome-icon-button-hover-border);
+  background: var(--chrome-icon-button-hover-bg);
+  transform: translateY(-1px);
+}
+
+.template-use-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  stroke-width: 2.4;
+}
+
 .sticky-editor-surface.has-table-of-contents .bn-editor {
   padding-right: min(300px, 34vw);
 }
@@ -3608,6 +3649,7 @@ body.is-exporting .sidebar-resize-handle,
 body.is-exporting .image-tools,
 body.is-exporting .sticky-toast,
 body.is-exporting .crop-dialog,
+body.is-exporting .template-use-button,
 body.is-exporting .editor-font-setting-control,
 body.is-exporting .editor-table-of-contents,
 body.is-exporting .preferences-panel,

@@ -501,7 +501,7 @@ test("Electron sticky header trash confirms and does not duplicate fallback wind
   }
 });
 
-test("Electron sticky close icon closes the current window like Ctrl+W", async () => {
+test("Electron sticky close icon closes the current window with the platform shortcut", async () => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "notepane-electron-"),
   );
@@ -535,7 +535,11 @@ test("Electron sticky close icon closes the current window like Ctrl+W", async (
     await firstStickyPage.bringToFront();
     await openStickyActionBar(firstStickyPage);
     const closeButton = firstStickyPage.getByRole("button", { name: "Close window" });
-    await expect(closeButton).toHaveAttribute("data-tooltip", "Close window · Ctrl+W");
+    const closeShortcut = process.platform === "darwin" ? "⌘W" : "Ctrl+W";
+    await expect(closeButton).toHaveAttribute(
+      "data-tooltip",
+      `Close window · ${closeShortcut}`,
+    );
     try {
       await closeButton.evaluate((button) => button.click());
     } catch (error) {

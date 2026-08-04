@@ -12,6 +12,8 @@ import { codeBlockOptions } from "@blocknote/code-block";
 import {
   BlockNoteSchema,
   createCodeBlockSpec,
+  createStyleSpecFromTipTapMark,
+  defaultStyleSpecs,
 } from "@blocknote/core";
 import "@blocknote/core/fonts/inter.css";
 import { BlockNoteView } from "@blocknote/mantine";
@@ -36,6 +38,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import {
+  applyEditorColor,
+  RecentColorFormattingToolbarController,
+  rememberEditorColor,
+} from "./editorColorFormatting.jsx";
 import "./styles.css";
 
 const NOTE_PANE_TEMPLATE_BLOCKS = [
@@ -179,11 +186,60 @@ const EMPTY_BLOCKS = [
   },
 ];
 
+const notionInlineCodeStyle = createStyleSpecFromTipTapMark(
+  defaultStyleSpecs.code.implementation.mark.extend({
+    excludes: "bold italic underline strike",
+  }),
+  "boolean",
+);
+
 const schema = BlockNoteSchema.create().extend({
   blockSpecs: {
     codeBlock: createCodeBlockSpec(codeBlockOptions),
   },
+  styleSpecs: {
+    code: notionInlineCodeStyle,
+  },
 });
+
+const CODE_FORMAT_LANGUAGE_ALIASES = {
+  js: "javascript",
+  ts: "typescript",
+  gql: "graphql",
+  md: "markdown",
+  yml: "yaml",
+};
+const CODE_FORMATTERS = {
+  javascript: { parser: "babel", plugins: ["babel", "estree"] },
+  jsx: { parser: "babel", plugins: ["babel", "estree"] },
+  typescript: { parser: "typescript", plugins: ["typescript", "estree"] },
+  tsx: { parser: "typescript", plugins: ["typescript", "estree"] },
+  json: { parser: "json", plugins: ["babel", "estree"] },
+  jsonc: { parser: "jsonc", plugins: ["babel", "estree"] },
+  jsonl: { custom: "jsonl" },
+  css: { parser: "css", plugins: ["postcss"] },
+  postcss: { parser: "css", plugins: ["postcss"] },
+  scss: { parser: "scss", plugins: ["postcss"] },
+  less: { parser: "less", plugins: ["postcss"] },
+  html: { parser: "html", plugins: ["html"] },
+  "vue-html": { parser: "html", plugins: ["html"] },
+  vue: { parser: "vue", plugins: ["html"] },
+  markdown: { parser: "markdown", plugins: ["markdown"] },
+  mdx: { parser: "mdx", plugins: ["markdown"] },
+  yaml: { parser: "yaml", plugins: ["yaml"] },
+  graphql: { parser: "graphql", plugins: ["graphql"] },
+};
+const CODE_FORMAT_PLUGIN_LOADERS = {
+  babel: () => import("prettier/plugins/babel"),
+  estree: () => import("prettier/plugins/estree"),
+  typescript: () => import("prettier/plugins/typescript"),
+  postcss: () => import("prettier/plugins/postcss"),
+  html: () => import("prettier/plugins/html"),
+  markdown: () => import("prettier/plugins/markdown"),
+  yaml: () => import("prettier/plugins/yaml"),
+  graphql: () => import("prettier/plugins/graphql"),
+};
+const loadedCodeFormatPlugins = new Map();
 
 const electronApi = window.blocknoteSticky;
 const DEFAULT_TITLE = "Untitled";
@@ -421,12 +477,19 @@ function App() {
   const [editorPreferences, setEditorPreferences] = useState(
     DEFAULT_EDITOR_PREFERENCES,
   );
+  const [recentEditorColors, setRecentEditorColors] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [sessionUndoToast, setSessionUndoToast] = useState(null);
   const [layoutTransition, setLayoutTransition] = useState(null);
   const sessionUndoToastTimerRef = useRef(null);
   const layoutTransitionTimerRef = useRef(null);
+
+  const rememberRecentEditorColor = useCallback((colorChoice) => {
+    setRecentEditorColors((currentColors) =>
+      rememberEditorColor(currentColors, colorChoice),
+    );
+  }, []);
 
   const clearLayoutTransition = useCallback(() => {
     if (layoutTransitionTimerRef.current) {
@@ -1003,6 +1066,8 @@ function App() {
         installedFontFamilies={installedFontFamilies}
         editorPreferences={editorPreferences}
         onEditorPreferencesChanged={updateEditorPreferences}
+        recentEditorColors={recentEditorColors}
+        onEditorColorUsed={rememberRecentEditorColor}
         layoutTransition={layoutTransition}
       />
       {sessionUndoToast && (
@@ -1046,6 +1111,8 @@ function StickyEditor({
   installedFontFamilies,
   editorPreferences,
   onEditorPreferencesChanged,
+  recentEditorColors,
+  onEditorColorUsed,
   layoutTransition,
 }) {
   const parsedStoredBlocks = useMemo(
@@ -1077,8 +1144,16 @@ function StickyEditor({
     pasteHandler: ({ event, editor, defaultPasteHandler }) => {
       const plainText = event.clipboardData?.getData("text/plain") ?? "";
       if (plainText && !isSelectionInsideCodeBlock(editor)) {
+        if (
+          isStandaloneWebUrl(plainText) &&
+          hasEditorRangeSelection(editor)
+        ) {
+          editor.insertInlineContent(plainText.trim(), { updateSelection: true });
+          return true;
+        }
+
         const normalizedPaste = normalizePastedMarkdownForBlockNote(plainText);
-        if (normalizedPaste.changed) {
+        if (normalizedPaste.shouldPasteAsMarkdown) {
           editor.pasteMarkdown(normalizedPaste.markdown);
           return true;
         }
@@ -1091,6 +1166,31 @@ function StickyEditor({
     },
   });
   useBlockNoteFloatingMenuGuard();
+  const codeBlockToolTargets = useCodeBlockToolTargets();
+
+  useEffect(() => {
+    const normalizeEditorClipboardText = (event) => {
+      if (!isEditorShortcutTarget(event.target) || !event.clipboardData) {
+        return;
+      }
+
+      const copiedPlainText = event.clipboardData.getData("text/plain");
+      const normalizedPlainText = normalizeCopiedEditorPlainText(
+        editor,
+        copiedPlainText,
+      );
+      if (normalizedPlainText !== copiedPlainText) {
+        event.clipboardData.setData("text/plain", normalizedPlainText);
+      }
+    };
+
+    document.addEventListener("copy", normalizeEditorClipboardText);
+    document.addEventListener("cut", normalizeEditorClipboardText);
+    return () => {
+      document.removeEventListener("copy", normalizeEditorClipboardText);
+      document.removeEventListener("cut", normalizeEditorClipboardText);
+    };
+  }, [editor]);
 
   const [title, setTitle] = useState(initialDisplayTitle);
   const [theme, setTheme] = useState(normalizeTheme(note.theme));
@@ -2027,6 +2127,18 @@ function StickyEditor({
 
   useEffect(() => {
     const handleEditorKeyDownCapture = (event) => {
+      if (
+        event.key === " " &&
+        !(event.metaKey || event.ctrlKey || event.altKey) &&
+        !isEditableFormTarget(event.target) &&
+        isEditorShortcutTarget(event.target) &&
+        convertNotionToggleShortcut(editor)
+      ) {
+        event.preventDefault();
+        setIsEditorActive(true);
+        return;
+      }
+
       if (event.key === "Tab") {
         if (isEditorShortcutTarget(event.target)) {
           setIsEditorActive(true);
@@ -2039,7 +2151,8 @@ function StickyEditor({
       }
 
       const key = event.key.toLowerCase();
-      if (key !== "a" && key !== "x") {
+      const isRepeatRecentColorShortcut = key === "h" && event.shiftKey;
+      if (key !== "a" && key !== "x" && !isRepeatRecentColorShortcut) {
         return;
       }
 
@@ -2049,14 +2162,31 @@ function StickyEditor({
 
       const isEditorTarget = isEditorActive && isEditorShortcutTarget(event.target);
       if (!isEditorTarget) {
+        if (isRepeatRecentColorShortcut) {
+          return;
+        }
         if (!isEditableFormTarget(event.target)) {
           event.preventDefault();
         }
         return;
       }
 
+      if (isRepeatRecentColorShortcut) {
+        event.preventDefault();
+        const recentColor = recentEditorColors[0];
+        if (recentColor && hasEditorRangeSelection(editor)) {
+          applyEditorColor(editor, recentColor);
+          setIsEditorActive(true);
+        }
+        return;
+      }
+
       if (key === "a") {
         event.preventDefault();
+        if (isSelectionInsideCodeBlock(editor)) {
+          selectCurrentCodeBlockContent(editor);
+          return;
+        }
         selectAllBlocks(editor);
         return;
       }
@@ -2101,7 +2231,13 @@ function StickyEditor({
       document.removeEventListener("keydown", handleEditorKeyDownCapture, true);
       document.removeEventListener("keydown", handleEditorTabKeyDown);
     };
-  }, [activeImageBlockId, editor, isEditorActive, scheduleSave]);
+  }, [
+    activeImageBlockId,
+    editor,
+    isEditorActive,
+    recentEditorColors,
+    scheduleSave,
+  ]);
 
   useEffect(() => {
     const handleImageClick = (event) => {
@@ -3411,7 +3547,22 @@ function StickyEditor({
             theme={appThemeMode}
             onChange={handleEditorChange}
             portalElements={{ default: document.body }}
-          />
+            formattingToolbar={false}
+          >
+            <RecentColorFormattingToolbarController
+              recentColors={recentEditorColors}
+              onColorUsed={onEditorColorUsed}
+              portalElement={document.body}
+            />
+          </BlockNoteView>
+          {codeBlockToolTargets.map(({ blockId, element }) => (
+            <CodeBlockTools
+              key={`code-block-tools-${blockId}`}
+              editor={editor}
+              blockId={blockId}
+              targetElement={element}
+            />
+          ))}
         </section>
       </div>
       {layoutTransition && (
@@ -3513,6 +3664,308 @@ function StickyEditor({
       )}
     </main>
   );
+}
+
+function CodeBlockTools({ editor, blockId, targetElement }) {
+  const [copyStatus, setCopyStatus] = useState("idle");
+  const [formatStatus, setFormatStatus] = useState("idle");
+  const [position, setPosition] = useState(null);
+  const copyResetTimerRef = useRef(null);
+  const formatResetTimerRef = useRef(null);
+  const block = findBlockById(editor.document, blockId);
+  const language = normalizeCodeLanguage(block?.props?.language);
+  const languageLabel = getCodeLanguageLabel(language);
+  const code = getCodeBlockText(block);
+  const canPrettify = Boolean(code.trim() && getCodeFormatter(language));
+
+  useLayoutEffect(() => {
+    const editorSurface = targetElement?.closest(
+      "[data-testid='sticky-editor-surface']",
+    );
+    if (!editorSurface) {
+      return undefined;
+    }
+
+    const updatePosition = () => {
+      const blockRect = targetElement.getBoundingClientRect();
+      const surfaceRect = editorSurface.getBoundingClientRect();
+      const nextPosition = {
+        top: blockRect.top - surfaceRect.top + editorSurface.scrollTop + 8,
+        left: blockRect.right - surfaceRect.left + editorSurface.scrollLeft - 9,
+      };
+      setPosition((currentPosition) =>
+        currentPosition &&
+        Math.abs(currentPosition.top - nextPosition.top) < 0.5 &&
+        Math.abs(currentPosition.left - nextPosition.left) < 0.5
+          ? currentPosition
+          : nextPosition,
+      );
+    };
+
+    updatePosition();
+    const editorDocument = targetElement.closest(".bn-editor");
+    const resizeObserver = new ResizeObserver(updatePosition);
+    resizeObserver.observe(targetElement);
+    resizeObserver.observe(editorSurface);
+    if (editorDocument) {
+      resizeObserver.observe(editorDocument);
+    }
+    const layoutObserver = new MutationObserver(updatePosition);
+    if (editorDocument) {
+      layoutObserver.observe(editorDocument, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    }
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      resizeObserver.disconnect();
+      layoutObserver.disconnect();
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [targetElement]);
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+    if (formatResetTimerRef.current) {
+      window.clearTimeout(formatResetTimerRef.current);
+    }
+  }, []);
+
+  const scheduleStatusReset = (timerRef, setter) => {
+    if (timerRef.current) {
+      window.clearTimeout(timerRef.current);
+    }
+    timerRef.current = window.setTimeout(() => setter("idle"), 1600);
+  };
+
+  const copyCode = async () => {
+    const currentBlock = findBlockById(editor.document, blockId);
+    const copied = await writeClipboardText(getCodeBlockText(currentBlock));
+    setCopyStatus(copied ? "success" : "error");
+    scheduleStatusReset(copyResetTimerRef, setCopyStatus);
+  };
+
+  const prettifyCodeBlock = async () => {
+    const currentBlock = findBlockById(editor.document, blockId);
+    const currentLanguage = normalizeCodeLanguage(currentBlock?.props?.language);
+    const code = getCodeBlockText(currentBlock);
+    if (!currentBlock || !code.trim() || !getCodeFormatter(currentLanguage)) {
+      return;
+    }
+
+    setFormatStatus("working");
+    try {
+      const formattedCode = await formatCodeForLanguage(code, currentLanguage);
+      if (formattedCode !== code) {
+        editor.updateBlock(blockId, { content: formattedCode });
+        setFormatStatus("success");
+      } else {
+        setFormatStatus("unchanged");
+      }
+    } catch {
+      setFormatStatus("error");
+    }
+    scheduleStatusReset(formatResetTimerRef, setFormatStatus);
+  };
+
+  const formatLabel = !getCodeFormatter(language)
+    ? `Prettify unavailable for ${languageLabel}`
+    : formatStatus === "working"
+      ? `Prettifying ${languageLabel} code`
+      : formatStatus === "success"
+        ? `${languageLabel} code prettified`
+        : formatStatus === "unchanged"
+          ? `${languageLabel} code is already formatted`
+        : formatStatus === "error"
+          ? `Could not prettify ${languageLabel} code`
+          : `Prettify ${languageLabel} code`;
+  const formatButtonText = formatStatus === "working"
+    ? "Formatting…"
+    : formatStatus === "success"
+      ? "Formatted"
+      : formatStatus === "unchanged"
+        ? "Already formatted"
+        : formatStatus === "error"
+          ? "Failed"
+          : "Prettify";
+  const copyLabel = copyStatus === "success"
+    ? `${languageLabel} code copied`
+    : copyStatus === "error"
+      ? `Could not copy ${languageLabel} code`
+      : `Copy ${languageLabel} code`;
+
+  return (
+    <div
+      className="code-block-tools"
+      role="toolbar"
+      aria-label={`${languageLabel} code block actions`}
+      contentEditable={false}
+      style={{
+        top: position?.top ?? 0,
+        left: position?.left ?? 0,
+        visibility: position ? "visible" : "hidden",
+      }}
+    >
+      <button
+        type="button"
+        className={`code-block-tool-button code-block-prettify-button is-${formatStatus}`}
+        aria-label={formatLabel}
+        data-tooltip={formatLabel}
+        title={!getCodeFormatter(language) ? formatLabel : undefined}
+        disabled={!canPrettify || formatStatus === "working"}
+        onMouseDown={preventFocusLoss}
+        onClick={() => void prettifyCodeBlock()}
+      >
+        {formatButtonText}
+      </button>
+      <button
+        type="button"
+        className={`code-block-tool-button code-block-copy-button is-${copyStatus}`}
+        aria-label={copyLabel}
+        data-tooltip={copyLabel}
+        onMouseDown={preventFocusLoss}
+        onClick={() => void copyCode()}
+      >
+        {copyStatus === "success" ? (
+          <Check aria-hidden="true" />
+        ) : copyStatus === "error" ? (
+          <X aria-hidden="true" />
+        ) : (
+          <Copy aria-hidden="true" />
+        )}
+      </button>
+    </div>
+  );
+}
+
+function useCodeBlockToolTargets() {
+  const [targets, setTargets] = useState([]);
+
+  useLayoutEffect(() => {
+    const editorSurface = document.querySelector(
+      "[data-testid='sticky-editor-surface']",
+    );
+    if (!editorSurface) {
+      return undefined;
+    }
+
+    let animationFrame = null;
+    const syncTargets = () => {
+      animationFrame = null;
+      const nextTargets = [...editorSurface.querySelectorAll(
+        ".bn-block-content[data-content-type='codeBlock']",
+      )].flatMap((element) => {
+        const blockId = element.closest(".bn-block-outer[data-id]")?.dataset.id;
+        return blockId ? [{ blockId, element }] : [];
+      });
+
+      setTargets((currentTargets) => {
+        const unchanged =
+          currentTargets.length === nextTargets.length &&
+          currentTargets.every(
+            (target, index) =>
+              target.blockId === nextTargets[index].blockId &&
+              target.element === nextTargets[index].element,
+          );
+        return unchanged ? currentTargets : nextTargets;
+      });
+    };
+    const scheduleSync = () => {
+      if (animationFrame !== null) {
+        return;
+      }
+      animationFrame = window.requestAnimationFrame(syncTargets);
+    };
+
+    syncTargets();
+    const observer = new MutationObserver(scheduleSync);
+    observer.observe(editorSurface, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+    };
+  }, []);
+
+  return targets;
+}
+
+function normalizeCodeLanguage(language) {
+  const normalizedLanguage = String(language || "text").trim().toLowerCase();
+  return CODE_FORMAT_LANGUAGE_ALIASES[normalizedLanguage] || normalizedLanguage;
+}
+
+function getCodeBlockText(block) {
+  if (typeof block?.content === "string") {
+    return block.content;
+  }
+  if (!Array.isArray(block?.content)) {
+    return "";
+  }
+  return block.content
+    .map((content) =>
+      typeof content === "string" ? content : String(content?.text ?? ""),
+    )
+    .join("");
+}
+
+function getCodeLanguageLabel(language) {
+  return codeBlockOptions.supportedLanguages?.[language]?.name || language || "Plain Text";
+}
+
+function getCodeFormatter(language) {
+  return CODE_FORMATTERS[normalizeCodeLanguage(language)] || null;
+}
+
+async function formatCodeForLanguage(code, language) {
+  const formatter = getCodeFormatter(language);
+  if (!formatter) {
+    throw new Error(`No formatter is available for ${language}.`);
+  }
+
+  if (formatter.custom === "jsonl") {
+    return formatJsonLines(code);
+  }
+
+  const [{ format }, plugins] = await Promise.all([
+    import("prettier/standalone"),
+    Promise.all(formatter.plugins.map(loadCodeFormatPlugin)),
+  ]);
+  const formattedCode = await format(code, {
+    parser: formatter.parser,
+    plugins,
+    printWidth: 100,
+    tabWidth: 2,
+    useTabs: false,
+  });
+  return formattedCode.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+}
+
+function loadCodeFormatPlugin(pluginName) {
+  if (!loadedCodeFormatPlugins.has(pluginName)) {
+    const loader = CODE_FORMAT_PLUGIN_LOADERS[pluginName];
+    if (!loader) {
+      throw new Error(`Unknown code format plugin: ${pluginName}`);
+    }
+    loadedCodeFormatPlugins.set(pluginName, loader());
+  }
+  return loadedCodeFormatPlugins.get(pluginName);
+}
+
+function formatJsonLines(code) {
+  return String(code)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.stringify(JSON.parse(line)))
+    .join("\n");
 }
 
 function StickyToast({ toast }) {
@@ -6480,6 +6933,9 @@ function dispatchBlockNoteColorItemClick(event) {
   if (!colorMenu) {
     return;
   }
+  if (colorMenu.classList.contains("notion-color-picker-dropdown")) {
+    return;
+  }
 
   colorItem.dispatchEvent(
     new MouseEvent("click", {
@@ -8546,14 +9002,69 @@ function isSelectionInsideCodeBlock(editor) {
   }
 }
 
+function hasEditorRangeSelection(editor) {
+  try {
+    return editor.transact((transaction) => !transaction.selection.empty);
+  } catch {
+    return false;
+  }
+}
+
+function isStandaloneWebUrl(text) {
+  return /^https?:\/\/\S+$/i.test(String(text).trim());
+}
+
+function normalizeCopiedEditorPlainText(editor, clipboardText) {
+  const normalizedMarkdown = String(clipboardText).replace(/\\\n/g, "\n");
+  if (normalizedMarkdown !== clipboardText) {
+    return normalizedMarkdown;
+  }
+
+  try {
+    return editor.transact((transaction) => {
+      let containsHardBreak = false;
+      transaction.doc.nodesBetween(
+        transaction.selection.from,
+        transaction.selection.to,
+        (node) => {
+          if (node.type.name === "hardBreak") {
+            containsHardBreak = true;
+          }
+        },
+      );
+
+      if (!containsHardBreak) {
+        return clipboardText;
+      }
+
+      return transaction.doc.textBetween(
+        transaction.selection.from,
+        transaction.selection.to,
+        "\n",
+        "\n",
+      );
+    });
+  } catch {
+    return normalizedMarkdown;
+  }
+}
+
 function normalizePastedMarkdownForBlockNote(markdown) {
   const normalizedLineEndings = String(markdown).replace(/\r\n?/g, "\n");
   const normalizedTables = normalizeWrappedMarkdownTables(normalizedLineEndings);
 
   return {
     markdown: normalizedTables,
-    changed: normalizedTables !== normalizedLineEndings,
+    shouldPasteAsMarkdown:
+      normalizedTables !== normalizedLineEndings ||
+      containsCommonMarkdownBlockSyntax(normalizedTables),
   };
+}
+
+function containsCommonMarkdownBlockSyntax(markdown) {
+  return /^(?: {0,3}#{1,6}(?:[ \t]+|$)| {0,3}(?:[-+*][ \t]+(?:\[[ xX]\][ \t]+)?|\d{1,9}[.)][ \t]+|>[ \t]?|`{3,}|~{3,})| {0,3}(?:[-*_][ \t]*){3,})/m.test(
+    markdown,
+  );
 }
 
 function normalizeWrappedMarkdownTables(markdown) {
@@ -8766,6 +9277,37 @@ function hasVisibleTextSelection() {
   return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
 
+function convertNotionToggleShortcut(editor) {
+  try {
+    const { block } = editor.getTextCursorPosition();
+    if (block.type !== "paragraph") {
+      return false;
+    }
+
+    const shouldConvert = editor.transact((transaction) => {
+      const { selection } = transaction;
+      return (
+        selection.empty &&
+        selection.$from.parent === selection.$to.parent &&
+        selection.$from.parentOffset === 1 &&
+        selection.$from.parent.textContent === ">"
+      );
+    });
+    if (!shouldConvert) {
+      return false;
+    }
+
+    editor.updateBlock(block, {
+      type: "toggleListItem",
+      props: {},
+      content: [],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function selectAllBlocks(editor) {
   if (editor.document.length === 0) {
     return;
@@ -8782,6 +9324,28 @@ function selectAllBlocks(editor) {
   } catch {
     // Some block types only support the ProseMirror whole-document selection above.
   }
+}
+
+function selectCurrentCodeBlockContent(editor) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  if (!view || !state || !state.selection.$from.parent.type.spec.code) {
+    return false;
+  }
+
+  const codeBlockStart = state.selection.$from.start();
+  const codeBlockEnd = state.selection.$from.end();
+  const codeBlockSelection = TextSelection.between(
+    state.doc.resolve(codeBlockStart),
+    state.doc.resolve(codeBlockEnd),
+  );
+  view.dispatch(
+    state.tr
+      .setSelection(codeBlockSelection)
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
 }
 
 function selectAllEditorDocument(editor) {

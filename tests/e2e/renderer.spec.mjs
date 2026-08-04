@@ -2884,6 +2884,177 @@ test("opens BlockNote slash menu with core demo commands", async ({ page }) => {
   }
 });
 
+test("creates a Notion-style toggle with greater-than and Space", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("Shortcut toggle");
+
+  const toggle = page
+    .locator("[data-content-type='toggleListItem']")
+    .filter({ hasText: "Shortcut toggle" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle.locator(".bn-inline-content")).toHaveText("Shortcut toggle");
+
+  const toggleButton = toggle.locator(".bn-toggle-button");
+  const buttonTopBeforeLineBreak = (await toggleButton.boundingBox())?.y;
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("Second toggle line");
+  await expect.poll(() =>
+    toggle.locator(".bn-inline-content").evaluate((element) => element.innerText),
+  ).toBe("Shortcut toggle\nSecond toggle line");
+
+  const alignment = await toggle.evaluate((element) => {
+    const button = element.querySelector(".bn-toggle-button");
+    const content = element.querySelector(".bn-inline-content");
+    const firstTextNode = document
+      .createTreeWalker(content, NodeFilter.SHOW_TEXT)
+      .nextNode();
+    const firstLineRange = document.createRange();
+    firstLineRange.selectNodeContents(firstTextNode);
+    const buttonRect = button.getBoundingClientRect();
+    const firstLineRect = firstLineRange.getBoundingClientRect();
+    return {
+      buttonTop: buttonRect.top,
+      firstLineCenterDelta: Math.abs(
+        buttonRect.top + buttonRect.height / 2 -
+          (firstLineRect.top + firstLineRect.height / 2),
+      ),
+    };
+  });
+  expect(Math.abs(alignment.buttonTop - buttonTopBeforeLineBreak))
+    .toBeLessThanOrEqual(1);
+  expect(alignment.firstLineCenterDelta).toBeLessThanOrEqual(2);
+  await expect(
+    page.locator("[data-content-type='quote']").filter({ hasText: "Shortcut toggle" }),
+  ).toHaveCount(0);
+});
+
+test("prettifies supported code blocks and copies code from upper-right actions", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await clickLastEmptyParagraph(page);
+  await pastePlainText(page, [
+    "```javascript",
+    "const answer={value:42,items:[1,2]}",
+    "```",
+  ].join("\n"));
+
+  const codeBlock = page
+    .locator("[data-content-type='codeBlock']")
+    .filter({ hasText: "const answer" });
+  const code = codeBlock.locator("code");
+  const toolbar = page.getByRole("toolbar", {
+    name: "JavaScript code block actions",
+  });
+  await expect(toolbar).toBeVisible();
+  const prettifyButton = toolbar.getByRole("button", {
+    name: "Prettify JavaScript code",
+  });
+  await expect(prettifyButton).toBeEnabled();
+  await expect(prettifyButton).toHaveText("Prettify");
+  await expect(toolbar.getByRole("button", { name: "Copy JavaScript code" }))
+    .toBeEnabled();
+
+  const geometry = await page.evaluate(() => {
+    const block = [...document.querySelectorAll("[data-content-type='codeBlock']")]
+      .find((element) => element.textContent.includes("const answer"));
+    const toolbar = document.querySelector(
+      ".code-block-tools[aria-label='JavaScript code block actions']",
+    );
+    const code = block.querySelector("code");
+    const blockRect = block.getBoundingClientRect();
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const codeRect = code.getBoundingClientRect();
+    return {
+      rightGap: blockRect.right - toolbarRect.right,
+      topGap: toolbarRect.top - blockRect.top,
+      codeClearance: codeRect.top - toolbarRect.bottom,
+    };
+  });
+  expect(geometry.rightGap).toBeGreaterThanOrEqual(6);
+  expect(geometry.rightGap).toBeLessThanOrEqual(12);
+  expect(geometry.topGap).toBeGreaterThanOrEqual(6);
+  expect(geometry.topGap).toBeLessThanOrEqual(11);
+  expect(geometry.codeClearance).toBeGreaterThanOrEqual(3);
+
+  await prettifyButton.click();
+  const formattedCode = "const answer = { value: 42, items: [1, 2] };";
+  await expect(code).toHaveText(formattedCode);
+  const formattedButton = toolbar.getByRole("button", {
+    name: "JavaScript code prettified",
+  });
+  await expect(formattedButton).toHaveText("Formatted");
+
+  await expect(toolbar.getByRole("button", { name: "Prettify JavaScript code" }))
+    .toHaveText("Prettify", { timeout: 2500 });
+  await toolbar.getByRole("button", { name: "Prettify JavaScript code" }).click();
+  await expect(toolbar.getByRole("button", {
+    name: "JavaScript code is already formatted",
+  })).toHaveText("Already formatted");
+
+  await toolbar.getByRole("button", { name: "Copy JavaScript code" }).click();
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(formattedCode);
+  await expect(toolbar.getByRole("button", { name: "JavaScript code copied" }))
+    .toBeVisible();
+});
+
+test("keeps copy available when a code language has no browser formatter", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await pastePlainText(page, [
+    "```python",
+    "result={'value':42}",
+    "```",
+  ].join("\n"));
+  const pythonToolbar = page.getByRole("toolbar", {
+    name: "Python code block actions",
+  });
+  await expect(pythonToolbar).toBeVisible();
+  await expect(
+    pythonToolbar.getByRole("button", { name: "Prettify unavailable for Python" }),
+  ).toBeDisabled();
+  await expect(
+    pythonToolbar.getByRole("button", { name: "Prettify unavailable for Python" }),
+  ).toHaveText("Prettify");
+  await expect(pythonToolbar.getByRole("button", { name: "Copy Python code" }))
+    .toBeEnabled();
+});
+
+test("selects only the current code block with Command+A", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await clickLastEmptyParagraph(page);
+  await pastePlainText(page, [
+    "Before code block",
+    "",
+    "```javascript",
+    "const first = 1;",
+    "const second = 2;",
+    "```",
+    "",
+    "After code block",
+  ].join("\n"));
+
+  const code = page.locator("[data-content-type='codeBlock'] code").first();
+  await code.click();
+  await page.keyboard.press(modifierShortcut("A"));
+
+  const selectedText = await page.evaluate(
+    () => window.getSelection()?.toString() ?? "",
+  );
+  expect(selectedText).toBe("const first = 1;\nconst second = 2;");
+  expect(selectedText).not.toContain("Before code block");
+  expect(selectedText).not.toContain("After code block");
+
+  await page.keyboard.press(modifierShortcut("C"));
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("const first = 1;\nconst second = 2;");
+  const editorSurface = page.getByTestId("sticky-editor-surface");
+  await expect(editorSurface.getByText("Before code block", { exact: true }))
+    .toBeVisible();
+  await expect(editorSurface.getByText("After code block", { exact: true }))
+    .toBeVisible();
+});
+
 test("keeps Enter and Shift+Enter behavior in the editor", async ({ page }) => {
   await clickLastEmptyParagraph(page);
   await page.keyboard.type("first line");
@@ -2902,6 +3073,95 @@ test("keeps Enter and Shift+Enter behavior in the editor", async ({ page }) => {
     .filter({ hasText: "next block" })
     .count();
   expect(blockCount).toBeGreaterThan(0);
+});
+
+test("copies Shift+Enter line breaks without markdown escape characters", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("first copied line");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("second copied line");
+  await page.keyboard.press(modifierShortcut("A"));
+
+  const copiedPlainText = await page.evaluate(() => {
+    const editor = document.querySelector(".bn-editor");
+    const clipboardData = new DataTransfer();
+    editor.dispatchEvent(
+      new ClipboardEvent("copy", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+    return clipboardData.getData("text/plain");
+  });
+
+  expect(copiedPlainText).toContain("first copied line\nsecond copied line");
+  expect(copiedPlainText).not.toContain("first copied line\\\nsecond copied line");
+});
+
+test("pastes markdown headings from a rich clipboard as native headings", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await pasteClipboardText(page, {
+    plainText:
+      "# Heading one\n## Heading two\n### Heading three\n\n[Explicit link](https://example.com/explicit)",
+    html:
+      "<p># Heading one</p><p>## Heading two</p><p>### Heading three</p><p>[Explicit link](https://example.com/explicit)</p>",
+  });
+
+  await expect(page.getByRole("heading", { name: "Heading one", level: 1 }))
+    .toBeVisible();
+  await expect(page.getByRole("heading", { name: "Heading two", level: 2 }))
+    .toBeVisible();
+  await expect(page.getByRole("heading", { name: "Heading three", level: 3 }))
+    .toBeVisible();
+  await expect(page.getByText("# Heading one", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Explicit link" }))
+    .toHaveAttribute("href", "https://example.com/explicit");
+});
+
+test("replaces selected text when pasting a URL instead of turning it into link text", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("replace this selected text");
+  await page.keyboard.press(modifierShortcut("A"));
+  await pastePlainText(page, "https://example.com/replacement");
+
+  const editorSurface = page.getByTestId("sticky-editor-surface");
+  await expect(editorSurface.getByText("https://example.com/replacement"))
+    .toBeVisible();
+  await expect(editorSurface.getByText("replace this selected text"))
+    .toHaveCount(0);
+});
+
+test("renders editor bullets and checkboxes at a more visible size", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await pastePlainText(page, "- Bullet visibility\n- [ ] Checkbox visibility");
+
+  const editorSurface = page.getByTestId("sticky-editor-surface");
+  await expect(editorSurface.getByText("Bullet visibility", { exact: true }))
+    .toBeVisible();
+  await expect(editorSurface.getByText("Checkbox visibility", { exact: true }))
+    .toBeVisible();
+
+  const markerMetrics = await page.evaluate(() => {
+    const bullet = document.querySelector("[data-content-type='bulletListItem']");
+    const bulletText = bullet?.querySelector(".bn-inline-content");
+    const checkbox = document.querySelector(
+      "[data-content-type='checkListItem'] input[type='checkbox']",
+    );
+    const checkboxRect = checkbox?.getBoundingClientRect();
+
+    return {
+      bulletFontSize: Number.parseFloat(getComputedStyle(bullet, "::before").fontSize),
+      textFontSize: Number.parseFloat(getComputedStyle(bulletText).fontSize),
+      checkboxWidth: checkboxRect?.width ?? 0,
+      checkboxHeight: checkboxRect?.height ?? 0,
+    };
+  });
+
+  expect(markerMetrics.bulletFontSize / markerMetrics.textFontSize)
+    .toBeGreaterThanOrEqual(1.1);
+  expect(Math.min(markerMetrics.checkboxWidth, markerMetrics.checkboxHeight))
+    .toBeGreaterThanOrEqual(14);
 });
 
 test("pastes wrapped markdown tables without breaking table cells into paragraphs", async ({ page }) => {
@@ -3041,8 +3301,171 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
   await styledText.scrollIntoViewIfNeeded();
   await styledText.dblclick();
 
-  await expect(page.getByRole("toolbar")).toBeVisible();
-  await expect(page.getByRole("button", { name: /bold/i })).toBeVisible();
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
+  await expect(formattingToolbar).toBeVisible();
+  await expect(formattingToolbar.getByRole("button", { name: /bold/i }))
+    .toBeVisible();
+});
+
+test("renders Command+E inline code with Notion-like styling and composable colors", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("InlineCode");
+  await page.keyboard.press(modifierShortcut("A"));
+  await page.keyboard.press(modifierShortcut("E"));
+
+  const inlineCode = page.locator(".bn-inline-content code", { hasText: "InlineCode" });
+  await expect(inlineCode).toBeVisible();
+
+  const lightStyle = await inlineCode.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const parentStyle = getComputedStyle(element.parentElement);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderRadius: Number.parseFloat(style.borderRadius),
+      color: style.color,
+      fontScale: Number.parseFloat(style.fontSize) / Number.parseFloat(parentStyle.fontSize),
+      fontWeight: style.fontWeight,
+      paddingLeft: Number.parseFloat(style.paddingLeft),
+    };
+  });
+  expect(lightStyle.backgroundColor).toBe("rgba(135, 131, 120, 0.16)");
+  expect(lightStyle.borderRadius).toBe(3);
+  expect(lightStyle.color).toBe("rgb(189, 63, 63)");
+  expect(lightStyle.fontScale).toBeCloseTo(0.85, 2);
+  expect(lightStyle.fontWeight).toBe("500");
+  expect(lightStyle.paddingLeft).toBeGreaterThanOrEqual(3);
+
+  await inlineCode.dblclick();
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
+  await page.locator(".bn-color-picker-dropdown:visible [data-test='text-color-blue']")
+    .click();
+  await expect.poll(async () =>
+    getInlineStyledTextColor(page, "InlineCode", "textColor", "blue"),
+  ).toBe("rgb(11, 110, 153)");
+  await expect(inlineCode).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await inlineCode.dblclick();
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
+  await page.locator(".bn-color-picker-dropdown:visible [data-test='background-color-yellow']")
+    .click();
+  await expect.poll(async () =>
+    getInlineStyledTextBackground(page, "InlineCode", "backgroundColor", "yellow"),
+  ).toBe("rgb(251, 243, 219)");
+  await expect(inlineCode).toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("Shift+L"));
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
+  await expect.poll(async () => await inlineCode.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundColor: style.backgroundColor,
+      color: style.color,
+    };
+  })).toEqual({
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    color: "rgb(255, 138, 128)",
+  });
+
+  const exportStyle = await inlineCode.evaluate((element) => {
+    document.body.classList.add("is-exporting");
+    const style = getComputedStyle(element);
+    const values = {
+      backgroundColor: style.backgroundColor,
+      color: style.color,
+    };
+    document.body.classList.remove("is-exporting");
+    return values;
+  });
+  expect(exportStyle).toEqual({
+    backgroundColor: "rgba(135, 131, 120, 0.16)",
+    color: "rgb(189, 63, 63)",
+  });
+});
+
+test("shows recent colors and reapplies the latest color with Command+Shift+H", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("First");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Second");
+
+  const editor = page.locator(".bn-editor");
+  const first = editor.getByText("First", { exact: true });
+  const second = editor.getByText("Second", { exact: true });
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
+
+  await first.dblclick();
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
+  const colorMenu = page.locator(".notion-color-picker-dropdown:visible");
+  await expect(colorMenu.getByText("Text color", { exact: true })).toBeVisible();
+  await expect(colorMenu.getByText("Background color", { exact: true })).toBeVisible();
+  await expect(colorMenu.locator("[data-test^='text-color-']")).toHaveCount(10);
+  await expect(colorMenu.locator("[data-test^='background-color-']")).toHaveCount(10);
+  const paletteColors = await colorMenu.evaluate((element) => {
+    const textColors = [...element.querySelectorAll(
+      ".notion-color-swatch[data-color-kind='text'] .notepane-editor-color-icon",
+    )].map((icon) => getComputedStyle(icon).color);
+    const backgroundColors = [...element.querySelectorAll(
+      ".notion-color-swatch[data-color-kind='background'] .notepane-editor-color-icon",
+    )].map((icon) => getComputedStyle(icon).backgroundColor);
+    const yellowBackground = getComputedStyle(element.querySelector(
+      ".notion-color-swatch[data-color-kind='background'][data-color-value='yellow'] .notepane-editor-color-icon",
+    )).backgroundColor;
+    return {
+      distinctBackgroundColors: new Set(backgroundColors).size,
+      distinctTextColors: new Set(textColors).size,
+      yellowBackground,
+    };
+  });
+  expect(paletteColors.distinctTextColors).toBeGreaterThanOrEqual(9);
+  expect(paletteColors.distinctBackgroundColors).toBeGreaterThanOrEqual(9);
+  expect(paletteColors.yellowBackground).toBe("rgb(251, 243, 219)");
+  await colorMenu.locator("[data-test='background-color-yellow']").click();
+
+  await expect.poll(async () =>
+    getInlineStyledTextBackground(page, "First", "backgroundColor", "yellow"),
+  ).toBe("rgb(251, 243, 219)");
+
+  await second.dblclick();
+  await page.keyboard.press(modifierShortcut("Shift+H"));
+  await expect.poll(async () =>
+    getInlineStyledTextBackground(page, "Second", "backgroundColor", "yellow"),
+  ).toBe("rgb(251, 243, 219)");
+
+  await second.dblclick();
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
+  await expect(colorMenu.getByText("Recently used", { exact: true })).toBeVisible();
+  await expect(colorMenu.getByTestId("recent-editor-color-0"))
+    .toHaveAttribute("aria-label", "Recent: Yellow background color");
+  await colorMenu.locator("[data-test='text-color-blue']").click();
+
+  await expect.poll(async () =>
+    getInlineStyledTextColor(page, "Second", "textColor", "blue"),
+  ).toBe("rgb(11, 110, 153)");
+
+  await createBlankSession(page);
+  await page.keyboard.type("Third");
+  const third = page.locator(".bn-editor").getByText("Third", { exact: true });
+  await third.dblclick();
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
+  await expect(colorMenu).toBeVisible();
+  await expect(colorMenu.getByTestId("recent-editor-color-0"))
+    .toHaveAttribute("aria-label", "Recent: Blue text color");
+  await expect(colorMenu.getByTestId("recent-editor-color-1"))
+    .toHaveAttribute("aria-label", "Recent: Yellow background color");
+
+  await page.keyboard.press("Escape");
+  await third.dblclick();
+  await page.keyboard.press(modifierShortcut("Shift+H"));
+  await expect.poll(async () =>
+    getInlineStyledTextColor(page, "Third", "textColor", "blue"),
+  ).toBe("rgb(11, 110, 153)");
 });
 
 test("keeps BlockNote color and delete menus usable inside the app window", async ({ page }) => {
@@ -3051,7 +3474,7 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await page.keyboard.type("FormatTarget");
   const formattingTarget = page.getByText("FormatTarget");
   await formattingTarget.dblclick();
-  const formattingToolbar = page.getByRole("toolbar");
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
   await expect(formattingToolbar).toBeVisible();
   const colorsButton = formattingToolbar.getByRole("button", { name: "Colors" });
   await colorsButton.click();
@@ -3062,7 +3485,7 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await expectBlockNoteFloatingMenuInsideViewport(
     page,
     ".bn-color-picker-dropdown",
-    220,
+    140,
   );
   await page.locator(".bn-color-picker-dropdown:visible [data-test='text-color-red']").click();
 
@@ -3071,8 +3494,8 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   ).toBe("rgb(224, 62, 62)");
   await page.keyboard.press("Escape");
   await formattingTarget.dblclick();
-  await expect(page.getByRole("toolbar")).toBeVisible();
-  await page.getByRole("toolbar").getByRole("button", { name: "Colors" }).click();
+  await expect(formattingToolbar).toBeVisible();
+  await formattingToolbar.getByRole("button", { name: "Colors" }).click();
   await expect(page.locator(".bn-color-picker-dropdown:visible")).toBeVisible();
   await page.locator(".bn-color-picker-dropdown:visible [data-test='background-color-blue']")
     .click();
@@ -3218,10 +3641,17 @@ async function getBulletItemDepth(page, text) {
 }
 
 async function pastePlainText(page, text) {
+  await pasteClipboardText(page, { plainText: text });
+}
+
+async function pasteClipboardText(page, { plainText, html = "" }) {
   await page.evaluate((clipboardText) => {
     const editor = document.querySelector(".bn-editor");
     const clipboardData = new DataTransfer();
-    clipboardData.setData("text/plain", clipboardText);
+    clipboardData.setData("text/plain", clipboardText.plainText);
+    if (clipboardText.html) {
+      clipboardData.setData("text/html", clipboardText.html);
+    }
     editor.dispatchEvent(
       new ClipboardEvent("paste", {
         bubbles: true,
@@ -3229,7 +3659,7 @@ async function pastePlainText(page, text) {
         clipboardData,
       }),
     );
-  }, text);
+  }, { plainText, html });
 }
 
 async function getInlineStyledTextColor(page, text, styleType, value) {

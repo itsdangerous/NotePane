@@ -1,8 +1,11 @@
 import { useCallback } from "react";
 import {
-  FormattingToolbar,
+  BasicTextStyleButton,
+  BlockTypeSelect,
+  CreateLinkButton,
   FormattingToolbarController,
   getFormattingToolbarItems,
+  TextAlignButton,
   useBlockNoteEditor,
   useComponentsContext,
   useEditorState,
@@ -21,6 +24,20 @@ const EDITOR_COLOR_VALUES = [
   "red",
 ];
 const RECENT_EDITOR_COLOR_LIMIT = 5;
+const CONTEXTUAL_FORMATTING_TOOL_KEYS = new Set([
+  "tableCellMergeButton",
+  "fileCaptionButton",
+  "replaceFileButton",
+  "fileRenameButton",
+  "fileDeleteButton",
+  "fileDownloadButton",
+  "filePreviewButton",
+]);
+const FORMATTING_TOOLBAR_FLOATING_OPTIONS = {
+  useFloatingOptions: {
+    placement: "right-start",
+  },
+};
 
 export function rememberEditorColor(recentColors, colorChoice) {
   if (!isEditorColorChoice(colorChoice)) {
@@ -73,6 +90,7 @@ export function RecentColorFormattingToolbarController({
   return (
     <FormattingToolbarController
       formattingToolbar={Toolbar}
+      floatingUIOptions={FORMATTING_TOOLBAR_FLOATING_OPTIONS}
       portalElement={portalElement}
     />
   );
@@ -83,20 +101,49 @@ function RecentColorFormattingToolbar({
   recentColors,
   onColorUsed,
 }) {
-  const toolbarItems = getFormattingToolbarItems(blockTypeSelectItems);
+  const Components = useComponentsContext();
+  const contextualItems = getFormattingToolbarItems(blockTypeSelectItems).filter(
+    (item) => CONTEXTUAL_FORMATTING_TOOL_KEYS.has(item.key),
+  );
+
+  if (!Components) {
+    return null;
+  }
 
   return (
-    <FormattingToolbar blockTypeSelectItems={blockTypeSelectItems}>
-      {toolbarItems.map((item) =>
-        item.key === "colorStyleButton" ? (
-          <RecentColorStyleButton
-            key="recentColorStyleButton"
-            recentColors={recentColors}
-            onColorUsed={onColorUsed}
-          />
-        ) : item,
-      )}
-    </FormattingToolbar>
+    <Components.FormattingToolbar.Root
+      className="bn-toolbar bn-formatting-toolbar notepane-formatting-toolbar"
+    >
+      <div className="notepane-formatting-type-row">
+        <BlockTypeSelect items={blockTypeSelectItems} />
+      </div>
+      <div
+        className="notepane-formatting-actions"
+        role="group"
+        aria-label="Text formatting"
+      >
+        <RecentColorStyleButton
+          recentColors={recentColors}
+          onColorUsed={onColorUsed}
+        />
+        <BasicTextStyleButton basicTextStyle="bold" />
+        <BasicTextStyleButton basicTextStyle="italic" />
+        <BasicTextStyleButton basicTextStyle="underline" />
+        <BasicTextStyleButton basicTextStyle="strike" />
+        <CreateLinkButton />
+        <BasicTextStyleButton basicTextStyle="code" />
+        <TextAlignButton textAlignment="left" />
+        <TextAlignButton textAlignment="center" />
+        <TextAlignButton textAlignment="right" />
+      </div>
+      <div
+        className="notepane-formatting-contextual-actions"
+        role="group"
+        aria-label="Selected item actions"
+      >
+        {contextualItems}
+      </div>
+    </Components.FormattingToolbar.Root>
   );
 }
 

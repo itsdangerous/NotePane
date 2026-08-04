@@ -24,6 +24,7 @@ import {
   Check,
   Cog,
   Copy,
+  Download,
   Ellipsis,
   Eye,
   FileDown,
@@ -36,6 +37,7 @@ import {
   RotateCcw,
   TableOfContents as TableOfContentsIcon,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import {
@@ -43,6 +45,7 @@ import {
   RecentColorFormattingToolbarController,
   rememberEditorColor,
 } from "./editorColorFormatting.jsx";
+import { BlockMenuHighlightController } from "./editorSideMenu.jsx";
 import "./styles.css";
 
 const NOTE_PANE_TEMPLATE_BLOCKS = [
@@ -1947,6 +1950,48 @@ function StickyEditor({
     }
   }, [hideExportToast, note.id, showExportToast, title]);
 
+  const exportDataBackup = useCallback(async () => {
+    if (!electronApi?.exportBackup) {
+      showExportToast("Data backup is available in the desktop app.", "error");
+      return { canceled: true };
+    }
+
+    showExportToast("Exporting backup...", "progress", { timeout: 0 });
+    try {
+      await saveNow();
+      const result = await electronApi.exportBackup();
+      if (result?.canceled) {
+        hideExportToast();
+        return result;
+      }
+      showExportToast("Backup exported", "success");
+      return result;
+    } catch (error) {
+      showExportToast(error.message || "Backup export failed.", "error");
+      return { canceled: true, error: true };
+    }
+  }, [electronApi, hideExportToast, saveNow, showExportToast]);
+
+  const importDataBackup = useCallback(async () => {
+    if (!electronApi?.importBackup) {
+      showExportToast("Data restore is available in the desktop app.", "error");
+      return { canceled: true };
+    }
+
+    try {
+      await saveNow();
+      const result = await electronApi.importBackup();
+      if (result?.canceled) {
+        return result;
+      }
+      showExportToast("Backup imported", "success");
+      return result;
+    } catch (error) {
+      showExportToast(error.message || "Backup import failed.", "error");
+      return { canceled: true, error: true };
+    }
+  }, [electronApi, saveNow, showExportToast]);
+
   useEffect(() => {
     return electronApi?.onOpenPreferences?.(openPreferences);
   }, [openPreferences]);
@@ -3554,6 +3599,7 @@ function StickyEditor({
               onColorUsed={onEditorColorUsed}
               portalElement={document.body}
             />
+            <BlockMenuHighlightController />
           </BlockNoteView>
           {codeBlockToolTargets.map(({ blockId, element }) => (
             <CodeBlockTools
@@ -3638,6 +3684,8 @@ function StickyEditor({
           trashedNotes={trashedNotes}
           onAppThemeModeChange={onAppThemeModeChanged}
           onEditorPreferencesChange={updateGlobalEditorPreferences}
+          onExportBackup={exportDataBackup}
+          onImportBackup={importDataBackup}
           onRestoreTrashedNote={onRestoreTrashedNote}
           onPurgeTrashedNote={onPurgeTrashedNote}
           onClose={() => setIsPreferencesWindowOpen(false)}
@@ -5270,6 +5318,8 @@ function PreferencesWindow({
   trashedNotes,
   onAppThemeModeChange,
   onEditorPreferencesChange,
+  onExportBackup,
+  onImportBackup,
   onRestoreTrashedNote,
   onPurgeTrashedNote,
   onClose,
@@ -5277,6 +5327,7 @@ function PreferencesWindow({
   const [activePage, setActivePage] = useState(() =>
     normalizePreferencePageId(initialPage),
   );
+  const [backupOperation, setBackupOperation] = useState(null);
 
   useEffect(() => {
     setActivePage(normalizePreferencePageId(initialPage));
@@ -5318,6 +5369,18 @@ function PreferencesWindow({
     },
     [normalizedEditorPreferences, onEditorPreferencesChange],
   );
+
+  const runBackupOperation = useCallback(async (operation, callback) => {
+    if (backupOperation) {
+      return;
+    }
+    setBackupOperation(operation);
+    try {
+      await callback?.();
+    } finally {
+      setBackupOperation(null);
+    }
+  }, [backupOperation]);
 
   const renderActivePreferencePage = () => {
     if (activePage === "editor") {
@@ -5418,6 +5481,44 @@ function PreferencesWindow({
             optionsAriaLabel="App font family options"
             onFontFamilyChange={updateAppFontFamily}
           />
+        </div>
+        <div className="preferences-data-section">
+          <div className="preferences-section-title">Data</div>
+          <div className="preferences-section-description">
+            Save every active note, Trash item, and app preference in one portable
+            .notepane file. Backups work across NotePane for macOS and Windows.
+          </div>
+          <div className="preference-setting-row preference-backup-row">
+            <div>
+              <div className="preference-setting-title">Workspace backup</div>
+              <div className="preferences-section-description">
+                Import replaces the current workspace after making an automatic
+                safety backup.
+              </div>
+            </div>
+            <div className="preference-backup-actions">
+              <button
+                type="button"
+                className="preference-data-button"
+                disabled={Boolean(backupOperation)}
+                onMouseDown={preventFocusLoss}
+                onClick={() => void runBackupOperation("export", onExportBackup)}
+              >
+                <Download size={13} aria-hidden="true" />
+                {backupOperation === "export" ? "Exporting..." : "Export backup"}
+              </button>
+              <button
+                type="button"
+                className="preference-data-button preference-data-button-import"
+                disabled={Boolean(backupOperation)}
+                onMouseDown={preventFocusLoss}
+                onClick={() => void runBackupOperation("import", onImportBackup)}
+              >
+                <Upload size={13} aria-hidden="true" />
+                {backupOperation === "import" ? "Importing..." : "Import backup"}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
     );
@@ -9280,29 +9381,29 @@ function hasVisibleTextSelection() {
 function convertNotionToggleShortcut(editor) {
   try {
     const { block } = editor.getTextCursorPosition();
-    if (block.type !== "paragraph") {
+    if (editor.schema.blockSchema[block.type]?.content !== "inline") {
       return false;
     }
 
-    const shouldConvert = editor.transact((transaction) => {
+    return editor.transact((transaction) => {
       const { selection } = transaction;
-      return (
+      const shouldConvert = (
         selection.empty &&
         selection.$from.parent === selection.$to.parent &&
         selection.$from.parentOffset === 1 &&
-        selection.$from.parent.textContent === ">"
+        selection.$from.parent.textContent.startsWith(">")
       );
-    });
-    if (!shouldConvert) {
-      return false;
-    }
+      if (!shouldConvert) {
+        return false;
+      }
 
-    editor.updateBlock(block, {
-      type: "toggleListItem",
-      props: {},
-      content: [],
+      transaction.delete(selection.from - 1, selection.from);
+      editor.updateBlock(block, {
+        type: "toggleListItem",
+        props: {},
+      });
+      return true;
     });
-    return true;
   } catch {
     return false;
   }

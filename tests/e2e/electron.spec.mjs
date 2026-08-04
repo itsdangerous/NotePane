@@ -82,6 +82,129 @@ test("Electron app opens a sticky window and persists editor content", async () 
   }
 });
 
+test("Electron exports and imports a complete portable workspace backup", async () => {
+  const userDataDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-electron-"),
+  );
+  const exportDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-backup-export-"),
+  );
+  const importDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "notepane-backup-import-"),
+  );
+  const importFilePath = path.join(importDirectory, "portable.notepane");
+  writeInitialNotes(userDataDirectory, [
+    {
+      id: "current-note",
+      title: "Current workspace",
+      markdown: "Current data before import",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  writePortableBackup(importFilePath, {
+    appTheme: { mode: "dark" },
+    layoutMode: "tabs",
+    notes: [
+      {
+        id: "imported-note",
+        title: "Imported workspace",
+        titleManuallyEdited: true,
+        blocksJSON: null,
+        markdown: "Imported snapshot body",
+        bounds: { x: 90, y: 90, width: 960, height: 720 },
+        theme: { tabTextColor: "#2563eb", tabTextOpacity: 0.8 },
+        alwaysOnTop: false,
+        detached: false,
+        seedDemoContent: false,
+        trashedAt: null,
+        sortOrder: 1,
+        createdAt: 10,
+        updatedAt: 10,
+      },
+      {
+        id: "imported-trash",
+        title: "Imported trash",
+        titleManuallyEdited: true,
+        blocksJSON: null,
+        markdown: "Trash snapshot body",
+        bounds: { x: 110, y: 110, width: 720, height: 640 },
+        theme: { tabTextColor: null, tabTextOpacity: 1 },
+        alwaysOnTop: false,
+        detached: false,
+        seedDemoContent: false,
+        trashedAt: 20,
+        sortOrder: 2,
+        createdAt: 20,
+        updatedAt: 20,
+      },
+    ],
+  });
+
+  const electronApp = await launchApp(userDataDirectory, exportDirectory, {
+    BLOCKNOTE_STICKY_IMPORT_FILE: importFilePath,
+    BLOCKNOTE_STICKY_IMPORT_CONFIRM: "1",
+  });
+
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
+    await page.getByText("Current data before import", { exact: true }).click();
+    await page.keyboard.press("End");
+    await page.keyboard.insertText(" with an immediate edit");
+    await page.getByRole("button", { name: "Preferences" }).click();
+    const preferences = page.getByRole("dialog", { name: "Preferences window" });
+    await expect(preferences.getByText("Workspace backup")).toBeVisible();
+
+    await preferences.getByRole("button", { name: "Export backup" }).click();
+    await expect(page.locator(".sticky-toast-success")).toHaveText("Backup exported");
+    await expect.poll(() => {
+      return fs.readdirSync(exportDirectory)
+        .find((fileName) => fileName.endsWith(".notepane")) ?? null;
+    }).not.toBeNull();
+    const exportedBackupPath = fs.readdirSync(exportDirectory)
+      .find((fileName) => fileName.endsWith(".notepane"));
+    const exportedBackup = JSON.parse(
+      fs.readFileSync(path.join(exportDirectory, exportedBackupPath), "utf8"),
+    );
+    expect(exportedBackup.format).toBe("notepane-backup");
+    expect(exportedBackup.version).toBe(1);
+    expect(exportedBackup.data.notes[0].id).toBe("current-note");
+    expect(exportedBackup.data.notes[0].markdown).toContain("with an immediate edit");
+
+    const restoredWindowPromise = electronApp.waitForEvent("window");
+    await preferences.getByRole("button", { name: "Import backup" }).click();
+    const restoredPage = await restoredWindowPromise;
+    await expect(restoredPage.getByTestId("sticky-editor-surface")).toBeVisible();
+    await expect(restoredPage.getByRole("tab").first())
+      .toHaveAccessibleName(/Imported workspace/);
+    await expect(restoredPage.getByTestId("sticky-editor-surface"))
+      .toContainText("Imported snapshot body");
+
+    const restoredState = JSON.parse(
+      fs.readFileSync(path.join(userDataDirectory, "notes.json"), "utf8"),
+    );
+    expect(restoredState.appTheme.mode).toBe("dark");
+    expect(restoredState.notes.map((note) => note.id))
+      .toEqual(["imported-note", "imported-trash"]);
+    expect(restoredState.notes.find((note) => note.id === "imported-trash").trashedAt)
+      .toBe(20);
+
+    const safetyBackupNames = fs.readdirSync(path.join(userDataDirectory, "Backups"));
+    expect(safetyBackupNames).toHaveLength(1);
+    const safetyBackup = JSON.parse(
+      fs.readFileSync(
+        path.join(userDataDirectory, "Backups", safetyBackupNames[0]),
+        "utf8",
+      ),
+    );
+    expect(safetyBackup.data.notes[0].id).toBe("current-note");
+    expect(safetyBackup.data.notes[0].markdown).toContain("with an immediate edit");
+  } finally {
+    await electronApp.close();
+  }
+});
+
 test("Electron shows the NotePane template after the last tab is moved to trash", async () => {
   const userDataDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "notepane-electron-"),
@@ -1026,7 +1149,7 @@ test("Electron moves a sticky window when dragging its header", async () => {
   }
 });
 
-async function launchApp(userDataDirectory, exportDirectory) {
+async function launchApp(userDataDirectory, exportDirectory, extraEnvironment = {}) {
   return electron.launch({
     args: ["."],
     cwd: process.cwd(),
@@ -1036,9 +1159,33 @@ async function launchApp(userDataDirectory, exportDirectory) {
       ...(exportDirectory
         ? { BLOCKNOTE_STICKY_EXPORT_DIR: exportDirectory }
         : {}),
+      ...extraEnvironment,
       ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
     },
   });
+}
+
+function writePortableBackup(filePath, data) {
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify(
+      {
+        format: "notepane-backup",
+        version: 1,
+        exportedAt: "2026-08-04T08:30:00.000Z",
+        app: { name: "NotePane", version: "0.1.0" },
+        data: {
+          appTheme: data.appTheme,
+          layoutMode: data.layoutMode,
+          editorPreferences: {},
+          notes: data.notes,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 }
 
 function writeInitialNotes(userDataDirectory, notes) {

@@ -3,6 +3,8 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 
 const DEFAULT_NOTE_TITLE = "Untitled";
+const NOTE_PANE_BACKUP_FORMAT = "notepane-backup";
+const NOTE_PANE_BACKUP_VERSION = 1;
 const AUTO_NOTE_TITLE_MAX_LENGTH = 48;
 const DEFAULT_APP_THEME = Object.freeze({
   mode: "light",
@@ -598,25 +600,66 @@ class StickyStore {
     return note;
   }
 
+  createBackup(options = {}) {
+    return {
+      format: NOTE_PANE_BACKUP_FORMAT,
+      version: NOTE_PANE_BACKUP_VERSION,
+      exportedAt:
+        typeof options.exportedAt === "string"
+          ? options.exportedAt
+          : new Date().toISOString(),
+      app: {
+        name: "NotePane",
+        version:
+          typeof options.appVersion === "string" ? options.appVersion : null,
+      },
+      data: JSON.parse(JSON.stringify(this.state)),
+    };
+  }
+
+  inspectBackup(value) {
+    const normalizedBackup = normalizeBackup(value);
+    const notes = normalizedBackup.data.notes;
+    return {
+      format: normalizedBackup.format,
+      version: normalizedBackup.version,
+      exportedAt: normalizedBackup.exportedAt,
+      appVersion: normalizedBackup.app.version,
+      noteCount: notes.filter((note) => !isTrashedNote(note)).length,
+      trashCount: notes.filter(isTrashedNote).length,
+    };
+  }
+
+  restoreBackup(value, options = {}) {
+    const normalizedBackup = normalizeBackup(value);
+    const automaticBackupPath = options.automaticBackupPath;
+
+    if (typeof automaticBackupPath === "string" && automaticBackupPath) {
+      writeJsonAtomic(
+        automaticBackupPath,
+        this.createBackup({ appVersion: options.appVersion }),
+      );
+    }
+
+    const previousState = this.state;
+    this.state = normalizedBackup.data;
+    try {
+      this.save();
+    } catch (error) {
+      this.state = previousState;
+      throw error;
+    }
+    return this.inspectBackup(normalizedBackup);
+  }
+
   save() {
-    fs.mkdirSync(this.directoryPath, { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    fs.writeFileSync(
-      temporaryPath,
-      JSON.stringify(
-        {
-          version: 10,
-          appTheme: this.state.appTheme,
-          layoutMode: this.state.layoutMode,
-          editorPreferences: this.state.editorPreferences,
-          notes: this.state.notes,
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    fs.renameSync(temporaryPath, this.filePath);
+    writeJsonAtomic(this.filePath, {
+      version: 10,
+      appTheme: this.state.appTheme,
+      layoutMode: this.state.layoutMode,
+      editorPreferences: this.state.editorPreferences,
+      notes: this.state.notes,
+    });
   }
 
   backupCorruptedFile() {
@@ -633,6 +676,90 @@ class StickyStore {
       fs.copyFileSync(this.filePath, backupPath);
     } catch {
       // Best-effort backup only.
+    }
+  }
+}
+
+function normalizeBackup(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+  if (!source || source.format !== NOTE_PANE_BACKUP_FORMAT) {
+    throw new Error("This is not a NotePane backup file.");
+  }
+  if (source.version !== NOTE_PANE_BACKUP_VERSION) {
+    throw new Error(
+      source.version > NOTE_PANE_BACKUP_VERSION
+        ? "This backup was created by a newer version of NotePane."
+        : "This NotePane backup version is not supported.",
+    );
+  }
+
+  const data = source.data && typeof source.data === "object" && !Array.isArray(source.data)
+    ? source.data
+    : null;
+  if (!data || !Array.isArray(data.notes)) {
+    throw new Error("The NotePane backup does not contain valid note data.");
+  }
+
+  const noteIds = new Set();
+  for (const note of data.notes) {
+    if (!note || typeof note !== "object" || Array.isArray(note)) {
+      throw new Error("The NotePane backup contains an invalid note.");
+    }
+    if (typeof note.id !== "string" || !note.id.trim() || noteIds.has(note.id)) {
+      throw new Error("The NotePane backup contains invalid or duplicate note IDs.");
+    }
+    if (note.blocksJSON !== null && note.blocksJSON !== undefined) {
+      if (normalizeBlocksJSON(note.blocksJSON) === null) {
+        throw new Error(`The note \"${normalizeTitle(note.title)}\" has invalid editor data.`);
+      }
+    }
+    noteIds.add(note.id);
+  }
+
+  const editorPreferences = normalizeEditorPreferences(data.editorPreferences);
+  const notes = backfillMissingSortOrders(
+    data.notes.map((note) => normalizeNote(note, { editorPreferences })),
+  );
+  if (!notes.some((note) => !isTrashedNote(note))) {
+    throw new Error("The NotePane backup must contain at least one active note.");
+  }
+
+  return {
+    format: NOTE_PANE_BACKUP_FORMAT,
+    version: NOTE_PANE_BACKUP_VERSION,
+    exportedAt: normalizeBackupExportedAt(source.exportedAt),
+    app: {
+      name: "NotePane",
+      version:
+        typeof source.app?.version === "string" ? source.app.version : null,
+    },
+    data: {
+      appTheme: normalizeAppTheme(data.appTheme),
+      layoutMode: normalizeLayoutMode(data.layoutMode),
+      editorPreferences,
+      notes,
+    },
+  };
+}
+
+function normalizeBackupExportedAt(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+    throw new Error("The NotePane backup has an invalid export date.");
+  }
+  return new Date(value).toISOString();
+}
+
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(value, null, 2), "utf8");
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) {
+      fs.unlinkSync(temporaryPath);
     }
   }
 }
@@ -1331,6 +1458,8 @@ function clamp(value, minimum, maximum) {
 
 module.exports = {
   StickyStore,
+  NOTE_PANE_BACKUP_FORMAT,
+  NOTE_PANE_BACKUP_VERSION,
   DEFAULT_NOTE_TITLE,
   DEFAULT_APP_THEME,
   DEFAULT_LAYOUT_MODE,

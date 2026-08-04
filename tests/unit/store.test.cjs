@@ -5,6 +5,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   StickyStore,
+  NOTE_PANE_BACKUP_FORMAT,
+  NOTE_PANE_BACKUP_VERSION,
   DEFAULT_KEYBOARD_SHORTCUTS,
   DEFAULT_KEYBOARD_SHORTCUT_ENABLED,
 } = require("../../electron/store.cjs");
@@ -622,6 +624,104 @@ test("backs up a corrupted notes file and starts with an empty state", () => {
 
   assert.deepEqual(store.listNotes(), []);
   assert.equal(backups.length, 1);
+});
+
+test("exports and restores a versioned portable workspace backup", () => {
+  const sourceDirectory = createTemporaryDirectory();
+  const sourceStore = new StickyStore(sourceDirectory);
+  const activeNote = sourceStore.createNote({
+    x: 32,
+    y: 48,
+    width: 980,
+    height: 760,
+  });
+  const trashedNote = sourceStore.createNote({ width: 720, height: 640 });
+  sourceStore.updateContent({
+    noteId: activeNote.id,
+    blocksJSON: JSON.stringify([{ type: "paragraph", content: "Portable data" }]),
+    markdown: "Portable data",
+  });
+  sourceStore.updateAppearance(activeNote.id, {
+    title: "Portable workspace",
+    titleManuallyEdited: true,
+    theme: { tabTextColor: "#2563eb", tabTextOpacity: 0.8 },
+  });
+  sourceStore.deleteNote(trashedNote.id);
+  sourceStore.updateAppTheme({ mode: "dark" });
+  sourceStore.updateLayoutMode("sticky");
+  sourceStore.updateEditorPreferences({
+    ...sourceStore.getEditorPreferences(),
+    editorFontScale: 1.25,
+    showTableOfContents: true,
+  });
+
+  const backup = sourceStore.createBackup({
+    appVersion: "0.1.0",
+    exportedAt: "2026-08-04T08:30:00.000Z",
+  });
+  assert.equal(backup.format, NOTE_PANE_BACKUP_FORMAT);
+  assert.equal(backup.version, NOTE_PANE_BACKUP_VERSION);
+  assert.equal(sourceStore.inspectBackup(backup).noteCount, 1);
+  assert.equal(sourceStore.inspectBackup(backup).trashCount, 1);
+
+  const targetDirectory = createTemporaryDirectory();
+  const targetStore = new StickyStore(targetDirectory);
+  const replacedNote = targetStore.createNote({ width: 800, height: 600 });
+  targetStore.updateContent({
+    noteId: replacedNote.id,
+    blocksJSON: JSON.stringify([{ type: "paragraph", content: "Before import" }]),
+    markdown: "Before import",
+  });
+  const automaticBackupPath = path.join(
+    targetDirectory,
+    "Backups",
+    "before-import.notepane",
+  );
+
+  const restored = targetStore.restoreBackup(backup, {
+    appVersion: "0.1.0",
+    automaticBackupPath,
+  });
+  assert.equal(restored.noteCount, 1);
+  assert.equal(restored.trashCount, 1);
+  assert.equal(targetStore.getAppTheme().mode, "dark");
+  assert.equal(targetStore.getLayoutMode(), "sticky");
+  assert.equal(targetStore.getEditorPreferences().editorFontScale, 1.25);
+  assert.equal(targetStore.getEditorPreferences().showTableOfContents, true);
+  assert.equal(targetStore.getNote(activeNote.id).markdown, "Portable data");
+  assert.deepEqual(targetStore.listTrash().map((note) => note.id), [trashedNote.id]);
+
+  const safetyBackup = JSON.parse(fs.readFileSync(automaticBackupPath, "utf8"));
+  assert.equal(safetyBackup.format, NOTE_PANE_BACKUP_FORMAT);
+  assert.equal(safetyBackup.data.notes[0].id, replacedNote.id);
+  assert.equal(safetyBackup.data.notes[0].markdown, "Before import");
+
+  const reloadedStore = new StickyStore(targetDirectory);
+  assert.equal(reloadedStore.getNote(activeNote.id).markdown, "Portable data");
+  assert.deepEqual(reloadedStore.listTrash().map((note) => note.id), [trashedNote.id]);
+});
+
+test("rejects malformed, duplicate, and newer NotePane backups", () => {
+  const store = new StickyStore(createTemporaryDirectory());
+  const note = store.createNote({ width: 800, height: 600 });
+  const backup = store.createBackup({ exportedAt: "2026-08-04T08:30:00.000Z" });
+
+  assert.throws(
+    () => store.inspectBackup({ ...backup, format: "json" }),
+    /not a NotePane backup/i,
+  );
+  assert.throws(
+    () => store.inspectBackup({ ...backup, version: NOTE_PANE_BACKUP_VERSION + 1 }),
+    /newer version/i,
+  );
+  assert.throws(
+    () => store.inspectBackup({
+      ...backup,
+      data: { ...backup.data, notes: [backup.data.notes[0], { ...backup.data.notes[0] }] },
+    }),
+    /duplicate note IDs/i,
+  );
+  assert.equal(store.getNote(note.id).id, note.id);
 });
 
 function createTemporaryDirectory() {

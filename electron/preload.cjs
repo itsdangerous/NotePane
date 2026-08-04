@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("blocknoteSticky", {
   detachNote: (noteId) => ipcRenderer.invoke("notes:detach", noteId),
   attachNote: (noteId) => ipcRenderer.invoke("notes:attach", noteId),
   exportNote: (payload) => ipcRenderer.invoke("export:note", payload),
+  exportBackup: () => ipcRenderer.invoke("backup:export"),
+  importBackup: () => ipcRenderer.invoke("backup:import"),
   saveAsset: (payload) => ipcRenderer.invoke("assets:save-url", payload),
   listFonts: () => ipcRenderer.invoke("fonts:list"),
   moveWindowBy: (payload) => ipcRenderer.invoke("window:move-by", payload),

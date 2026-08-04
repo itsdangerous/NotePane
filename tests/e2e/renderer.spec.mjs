@@ -342,6 +342,21 @@ test("changes editor typography globally from preferences", async ({ page }) => 
   const appFontRow = preferencesPanel.locator(".app-font-family-setting");
   await expect(appFontRow.getByText("App font")).toBeVisible();
   await expect(appFontRow.getByLabel("App font family")).toHaveValue("Inter");
+  await expect(preferencesPanel.getByText("Workspace backup")).toBeVisible();
+  const exportBackupButton = preferencesPanel.getByRole("button", {
+    name: "Export backup",
+  });
+  const importBackupButton = preferencesPanel.getByRole("button", {
+    name: "Import backup",
+  });
+  await expect(exportBackupButton).toBeVisible();
+  await expect(importBackupButton).toBeVisible();
+  await exportBackupButton.click();
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveText("Data backup is available in the desktop app.");
+  await importBackupButton.click();
+  await expect(page.locator(".sticky-toast-error"))
+    .toHaveText("Data restore is available in the desktop app.");
   await appFontRow.getByLabel("App font family").fill("avenir");
   await expect(page.getByRole("listbox", { name: "App font family options" }))
     .toBeVisible();
@@ -2930,6 +2945,54 @@ test("creates a Notion-style toggle with greater-than and Space", async ({ page 
   ).toHaveCount(0);
 });
 
+test("converts greater-than at the start of an existing line into a toggle", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Existing line");
+  await page.keyboard.press("Home");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const toggle = page
+    .locator("[data-content-type='toggleListItem']")
+    .filter({ hasText: "Existing line" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle.locator(".bn-inline-content")).toHaveText("Existing line");
+  await expect(
+    page.locator("[data-content-type='quote']").filter({ hasText: "Existing line" }),
+  ).toHaveCount(0);
+});
+
+test("converts headings and checkboxes with a leading greater-than into toggles", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await pastePlainText(page, "# Existing heading\n- [ ] Existing checkbox");
+
+  const heading = page.getByRole("heading", {
+    name: "Existing heading",
+    level: 1,
+  });
+  await heading.click();
+  await page.keyboard.press("Home");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const checkboxText = page.getByText("Existing checkbox", { exact: true });
+  await checkboxText.click();
+  await page.keyboard.press("Home");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  for (const text of ["Existing heading", "Existing checkbox"]) {
+    const toggle = page
+      .locator("[data-content-type='toggleListItem']")
+      .filter({ hasText: text });
+    await expect(toggle).toBeVisible();
+    await expect(toggle.locator(".bn-inline-content")).toHaveText(text);
+  }
+  await expect(page.getByRole("heading", { name: "Existing heading" }))
+    .toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+});
+
 test("prettifies supported code blocks and copies code from upper-right actions", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await clickLastEmptyParagraph(page);
@@ -3303,8 +3366,125 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
 
   const formattingToolbar = page.locator(".bn-formatting-toolbar");
   await expect(formattingToolbar).toBeVisible();
-  await expect(formattingToolbar.getByRole("button", { name: /bold/i }))
-    .toBeVisible();
+  await expect(formattingToolbar).toHaveClass(/notepane-formatting-toolbar/);
+
+  const blockTypeButton = formattingToolbar
+    .locator(".notepane-formatting-type-row")
+    .getByRole("button");
+  await expect(blockTypeButton).toHaveText(/paragraph/i);
+
+  const textFormatting = formattingToolbar.getByRole("group", {
+    name: "Text formatting",
+  });
+  for (const buttonName of [
+    "Colors",
+    "Bold",
+    "Italic",
+    "Underline",
+    "Strike",
+    "Create link",
+    "Code",
+    "Align text left",
+    "Align text center",
+    "Align text right",
+  ]) {
+    await expect(textFormatting.getByRole("button", { name: buttonName }))
+      .toBeVisible();
+  }
+
+  const geometry = await formattingToolbar.evaluate((toolbar) => {
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const blockTypeRect = toolbar
+      .querySelector(".notepane-formatting-type-row button")
+      .getBoundingClientRect();
+    const actionButtons = [...toolbar.querySelectorAll(
+      ".notepane-formatting-actions button",
+    )];
+    const rowTops = [...new Set(actionButtons.map((button) =>
+      Math.round(button.getBoundingClientRect().top),
+    ))];
+
+    return {
+      toolbarWidth: toolbarRect.width,
+      blockTypeWidth: blockTypeRect.width,
+      actionButtonCount: actionButtons.length,
+      actionRowCount: rowTops.length,
+    };
+  });
+  expect(geometry.toolbarWidth).toBeGreaterThanOrEqual(180);
+  expect(geometry.toolbarWidth).toBeLessThanOrEqual(200);
+  expect(geometry.blockTypeWidth).toBeGreaterThanOrEqual(160);
+  expect(geometry.actionButtonCount).toBe(10);
+  expect(geometry.actionRowCount).toBe(2);
+
+  await textFormatting.getByRole("button", { name: "Bold" }).hover();
+  const tooltip = page.locator(".mantine-Tooltip-tooltip:visible .bn-tooltip");
+  await expect(tooltip).toBeVisible();
+  const tooltipStyle = await tooltip.evaluate((element) => ({
+    backgroundColor: getComputedStyle(element).backgroundColor,
+    fontSize: getComputedStyle(element.querySelector(".mantine-Text-root")).fontSize,
+  }));
+  expect(tooltipStyle.backgroundColor).toBe("rgb(47, 52, 55)");
+  expect(Number.parseFloat(tooltipStyle.fontSize)).toBeLessThanOrEqual(10);
+
+  await page.mouse.move(20, 20);
+  await blockTypeButton.click();
+  const blockTypeMenu = page.locator(".bn-select:visible");
+  await expect(blockTypeMenu).toBeVisible();
+  const headingTwo = blockTypeMenu.getByRole("menuitem", {
+    name: "Heading 2",
+    exact: true,
+  });
+  const iconLabelGap = await headingTwo.evaluate((item) => {
+    const icon = item.querySelector(".mantine-Menu-itemSection[data-position='left']");
+    const label = item.querySelector(".mantine-Menu-itemLabel");
+    return label.getBoundingClientRect().left - icon.getBoundingClientRect().right;
+  });
+  expect(iconLabelGap).toBeGreaterThanOrEqual(8);
+
+  await blockTypeMenu.getByRole("menuitem", {
+    name: "Heading 6",
+    exact: true,
+  }).click();
+  await expect(blockTypeButton).toHaveText(/Heading 6/);
+  const selectedTypeGap = await blockTypeButton.evaluate((button) => {
+    const icon = button.querySelector(
+      ".mantine-Button-section[data-position='left']",
+    );
+    const label = button.querySelector(".mantine-Button-label");
+    return label.getBoundingClientRect().left - icon.getBoundingClientRect().right;
+  });
+  expect(selectedTypeGap).toBeGreaterThanOrEqual(8);
+});
+
+test("shows an opaque compact link form and creates the selected-text link", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Link target");
+  await page.keyboard.press(modifierShortcut("A"));
+
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
+  await formattingToolbar.getByRole("button", { name: "Create link" }).click();
+
+  const linkForm = page.locator(".bn-form-popover:visible");
+  const urlInput = linkForm.getByPlaceholder("Edit URL");
+  await expect(urlInput).toBeVisible();
+  const formStyle = await linkForm.evaluate((element) => ({
+    backgroundColor: getComputedStyle(element).backgroundColor,
+    borderStyle: getComputedStyle(element).borderStyle,
+    boxShadow: getComputedStyle(element).boxShadow,
+    inputFontSize: getComputedStyle(element.querySelector("input")).fontSize,
+    inputPaddingLeft: getComputedStyle(element.querySelector("input")).paddingLeft,
+  }));
+  expect(formStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(formStyle.borderStyle).toBe("solid");
+  expect(formStyle.boxShadow).not.toBe("none");
+  expect(Number.parseFloat(formStyle.inputFontSize)).toBeLessThanOrEqual(11);
+  expect(Number.parseFloat(formStyle.inputPaddingLeft)).toBeGreaterThanOrEqual(28);
+
+  await urlInput.fill("example.com");
+  await urlInput.press("Enter");
+  await expect(page.getByRole("link", { name: "Link target" }))
+    .toHaveAttribute("href", "https://example.com");
 });
 
 test("renders Command+E inline code with Notion-like styling and composable colors", async ({ page }) => {
@@ -3576,6 +3756,57 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
 
   await expect(page.locator(".bn-editor").getByText("Objective:", { exact: true }))
     .toHaveCount(0);
+});
+
+test("highlights the active block while its six-dot menu is open", async ({ page }) => {
+  await loadTemplatePreview(page);
+  const paragraph = page.locator(".bn-editor").getByText("Objective:", {
+    exact: true,
+  });
+  const blockId = await paragraph.evaluate((element) =>
+    element.closest(".bn-block-outer").dataset.id,
+  );
+  const block = page.locator(
+    `.bn-block-outer[data-id="${blockId}"] > .bn-block`,
+  );
+
+  const openBlockMenu = async () => {
+    await paragraph.scrollIntoViewIfNeeded();
+    await paragraph.click();
+    const paragraphBox = await paragraph.boundingBox();
+    await page.mouse.move(
+      paragraphBox.x - 24,
+      paragraphBox.y + paragraphBox.height / 2,
+    );
+    await page.getByRole("button", { name: "Open block menu" }).click();
+    await expect(page.locator(".bn-drag-handle-menu:visible")).toBeVisible();
+    await expect(page.locator("style[data-block-menu-highlight]"))
+      .toHaveAttribute("data-block-menu-highlight", blockId);
+    return await block.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        animationName: style.animationName,
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+      };
+    });
+  };
+
+  const lightHighlight = await openBlockMenu();
+  expect(lightHighlight.animationName).toBe("blockMenuSelectionIn");
+  expect(lightHighlight.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(lightHighlight.boxShadow).not.toBe("none");
+
+  await paragraph.click();
+  await expect(page.locator(".bn-drag-handle-menu:visible")).toHaveCount(0);
+  await expect(page.locator("style[data-block-menu-highlight]")).toHaveCount(0);
+  await page.keyboard.press(modifierShortcut("Shift+L"));
+  await expect(page.getByTestId("sticky-shell"))
+    .toHaveAttribute("data-theme-mode", "dark");
+
+  const darkHighlight = await openBlockMenu();
+  expect(darkHighlight.backgroundColor).not.toBe(lightHighlight.backgroundColor);
+  expect(darkHighlight.boxShadow).not.toBe(lightHighlight.boxShadow);
 });
 
 test("shows table interaction UI when a table cell is selected", async ({ page }) => {

@@ -45,9 +45,13 @@ const windows = new Map();
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const userDataDirOverride = process.env.BLOCKNOTE_STICKY_USER_DATA_DIR;
 const exportDirectoryOverride = process.env.BLOCKNOTE_STICKY_EXPORT_DIR;
+const backupImportFileOverride = process.env.BLOCKNOTE_STICKY_IMPORT_FILE;
+const backupImportConfirmOverride = process.env.BLOCKNOTE_STICKY_IMPORT_CONFIRM;
+const MAX_BACKUP_FILE_SIZE = 512 * 1024 * 1024;
 
 let store;
 let quitting = false;
+let backupOperationInProgress = false;
 const manuallyClosedStickyNoteIds = new Set();
 let installedFontsPromise = null;
 
@@ -571,7 +575,9 @@ function recreateWindowsForLayoutMode(activeNoteId, options = {}) {
   for (const entry of previousEntries) {
     entry.closingProgrammatically = true;
     entry.primary = false;
-    persistWindowBounds(entry.window);
+    if (options.persistExistingBounds !== false) {
+      persistWindowBounds(entry.window);
+    }
   }
 
   if (layoutMode === "sticky") {
@@ -1319,6 +1325,92 @@ function installIpcHandlers() {
     });
   });
 
+  ipcMain.handle("backup:export", async (event) => withBackupOperation(async () => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) {
+      throw new Error("No active window found for backup export.");
+    }
+
+    await waitForPendingEditorSaves();
+    const backup = store.createBackup({ appVersion: app.getVersion() });
+    const defaultName = `NotePane Backup ${formatBackupTimestamp(new Date())}.notepane`;
+    const result = await saveBuffer({
+      window,
+      buffer: Buffer.from(JSON.stringify(backup, null, 2), "utf8"),
+      defaultName,
+      dialogTitle: "Export NotePane backup",
+      filters: [{ name: "NotePane Backup", extensions: ["notepane"] }],
+    });
+
+    return {
+      ...result,
+      summary: result.canceled ? null : store.inspectBackup(backup),
+    };
+  }));
+
+  ipcMain.handle("backup:import", async (event) => withBackupOperation(async () => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) {
+      throw new Error("No active window found for backup import.");
+    }
+
+    const selection = await selectBackupFile(window);
+    if (selection.canceled || !selection.filePath) {
+      return { canceled: true, imported: false };
+    }
+
+    const backup = readBackupFile(selection.filePath);
+    const summary = store.inspectBackup(backup);
+    const confirmation = backupImportConfirmOverride === "1"
+      ? { response: 0 }
+      : await dialog.showMessageBox(window, {
+          type: "warning",
+          title: "Import NotePane backup?",
+          message: "Replace the current NotePane workspace?",
+          detail:
+            `${summary.noteCount} active note${summary.noteCount === 1 ? "" : "s"} and ` +
+            `${summary.trashCount} trash item${summary.trashCount === 1 ? "" : "s"} will be imported. ` +
+            "Your current workspace will be backed up automatically first.",
+          buttons: ["Import backup", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        });
+    if (confirmation.response !== 0) {
+      return { canceled: true, imported: false, summary };
+    }
+
+    await waitForPendingEditorSaves();
+    const automaticBackupPath = path.join(
+      app.getPath("userData"),
+      "Backups",
+      `Before import ${formatBackupTimestamp(new Date())}.notepane`,
+    );
+    const restoredSummary = store.restoreBackup(backup, {
+      appVersion: app.getVersion(),
+      automaticBackupPath,
+    });
+    const activeNote = store.listNotes()[0];
+    manuallyClosedStickyNoteIds.clear();
+
+    setTimeout(() => {
+      if (!activeNote) {
+        return;
+      }
+      recreateWindowsForLayoutMode(activeNote.id, {
+        persistExistingBounds: false,
+      });
+      buildMenu();
+    }, 50);
+
+    return {
+      canceled: false,
+      imported: true,
+      summary: restoredSummary,
+      automaticBackupPath,
+    };
+  }));
+
   ipcMain.handle("assets:save-url", async (event, payload) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const asset = await readAssetFromUrl(payload?.url);
@@ -1389,6 +1481,23 @@ function installIpcHandlers() {
   });
 }
 
+async function withBackupOperation(callback) {
+  if (backupOperationInProgress) {
+    throw new Error("Another backup operation is already in progress.");
+  }
+
+  backupOperationInProgress = true;
+  try {
+    return await callback();
+  } finally {
+    backupOperationInProgress = false;
+  }
+}
+
+async function waitForPendingEditorSaves() {
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
 async function saveBuffer({ window, buffer, defaultName, dialogTitle, filters }) {
   if (exportDirectoryOverride) {
     fs.mkdirSync(exportDirectoryOverride, { recursive: true });
@@ -1409,6 +1518,42 @@ async function saveBuffer({ window, buffer, defaultName, dialogTitle, filters })
 
   fs.writeFileSync(result.filePath, buffer);
   return { canceled: false, filePath: result.filePath };
+}
+
+async function selectBackupFile(window) {
+  if (backupImportFileOverride) {
+    return { canceled: false, filePath: backupImportFileOverride };
+  }
+
+  const result = await dialog.showOpenDialog(window, {
+    title: "Import NotePane backup",
+    properties: ["openFile"],
+    filters: [{ name: "NotePane Backup", extensions: ["notepane"] }],
+  });
+  return {
+    canceled: result.canceled || result.filePaths.length === 0,
+    filePath: result.filePaths[0] ?? null,
+  };
+}
+
+function readBackupFile(filePath) {
+  const fileSize = fs.statSync(filePath).size;
+  if (fileSize > MAX_BACKUP_FILE_SIZE) {
+    throw new Error("This NotePane backup is larger than the 512 MB import limit.");
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error("This NotePane backup file is not valid JSON.");
+    }
+    throw error;
+  }
+}
+
+function formatBackupTimestamp(date) {
+  return date.toISOString().replace("T", " ").replace(/[:]/g, "-").replace("Z", "");
 }
 
 async function readAssetFromUrl(url) {

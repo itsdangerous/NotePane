@@ -1624,6 +1624,67 @@ body.theme-dark,
   font: 720 12px/1.15 var(--notepane-ui-font);
 }
 
+.preferences-data-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sticky-border-color);
+}
+
+.preference-backup-row {
+  align-items: flex-start;
+}
+
+.preference-backup-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.preference-data-button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-icon-button-border);
+  border-radius: 8px;
+  background: var(--chrome-icon-button-bg);
+  color: var(--sticky-panel-text);
+  box-shadow: var(--chrome-icon-button-shadow);
+  font: 680 10px/1 var(--notepane-ui-font);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.preference-data-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--sticky-text-color) 18%, transparent);
+  background: var(--sticky-control-hover-bg);
+  transform: translateY(-1px);
+}
+
+.preference-data-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sticky-text-color) 32%, transparent);
+  outline-offset: 2px;
+}
+
+.preference-data-button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.preference-data-button-import {
+  color: color-mix(in srgb, var(--sticky-panel-text) 86%, #b45309);
+}
+
 .preference-toggle-switch {
   display: grid;
   position: relative;
@@ -3190,6 +3251,36 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
   color: #ffffff !important;
 }
 
+.mantine-Tooltip-tooltip:has(> .bn-tooltip) {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.bn-tooltip {
+  gap: 1px !important;
+  padding: 5px 7px !important;
+  border: 1px solid rgb(255 255 255 / 0.12) !important;
+  border-radius: 6px !important;
+  background: #2f3437 !important;
+  box-shadow: 0 5px 14px rgb(0 0 0 / 0.2) !important;
+  color: #ffffff !important;
+  text-align: center;
+}
+
+.bn-tooltip .mantine-Text-root {
+  margin: 0;
+  color: inherit !important;
+  font: 600 10px/1.2 var(--notepane-ui-font) !important;
+}
+
+.bn-tooltip .mantine-Text-root + .mantine-Text-root {
+  color: rgb(255 255 255 / 0.68) !important;
+  font-size: 9px !important;
+  font-weight: 500 !important;
+}
+
 @keyframes sessionTabEnterVertical {
   from {
     opacity: 0;
@@ -3531,6 +3622,20 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
   border-color: var(--sticky-table-border-color, var(--bn-colors-border)) !important;
 }
 
+.bn-editor .bn-block-outer > .bn-block {
+  border-radius: 6px;
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+@keyframes blockMenuSelectionIn {
+  from {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
 .bn-table-handle,
 .bn-extend-button,
 .bn-table-cell-handle {
@@ -3623,6 +3728,96 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
   border-color: var(--sticky-portal-menu-border-color, var(--bn-colors-border)) !important;
 }
 
+.bn-select {
+  min-width: 182px;
+  padding: 6px !important;
+}
+
+.bn-select .mantine-Menu-item {
+  min-height: 32px;
+  padding: 5px 7px !important;
+  border-radius: 6px;
+  font: 500 12px/1.2 var(--notepane-ui-font);
+}
+
+.bn-select .mantine-Menu-itemSection[data-position="left"] {
+  display: grid;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  margin-inline-end: 9px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sticky-panel-text) 7%, transparent);
+}
+
+.bn-select .mantine-Menu-itemSection[data-position="left"] svg {
+  width: 16px;
+  height: 16px;
+}
+
+.bn-select .mantine-Menu-itemSection[data-position="right"] {
+  margin-inline-start: auto;
+}
+
+.bn-popover-content.bn-form-popover {
+  --bn-colors-menu-text: var(--sticky-panel-text);
+  --bn-colors-menu-background: var(--sticky-portal-menu-bg);
+  --bn-colors-hovered-background: var(--sticky-portal-menu-hover-bg);
+  --bn-colors-border: var(--sticky-portal-menu-border-color);
+  min-width: 276px;
+  gap: 4px;
+  padding: 6px !important;
+  border: 1px solid var(--sticky-portal-menu-border-color) !important;
+  border-radius: 9px !important;
+  background: var(--sticky-portal-menu-bg) !important;
+  box-shadow: var(--sticky-portal-menu-shadow) !important;
+  color: var(--sticky-panel-text) !important;
+}
+
+.bn-form-popover .mantine-TextInput-root,
+.bn-form-popover .mantine-FileInput-root {
+  width: 100%;
+}
+
+.bn-form-popover
+  :is(.mantine-TextInput-wrapper, .mantine-FileInput-wrapper) {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--sticky-portal-menu-border-color);
+  border-radius: 6px;
+  background: var(--sticky-panel-bg);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.bn-form-popover
+  :is(.mantine-TextInput-wrapper, .mantine-FileInput-wrapper):focus-within {
+  border-color: #2383e2;
+  box-shadow: 0 0 0 2px rgb(35 131 226 / 0.18);
+}
+
+.bn-form-popover
+  :is(.mantine-TextInput-input, .mantine-FileInput-input) {
+  height: 32px;
+  padding-inline: 30px 8px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--sticky-panel-text) !important;
+  font: 500 11px/1.2 var(--notepane-ui-font);
+}
+
+.bn-form-popover
+  :is(.mantine-TextInput-input, .mantine-FileInput-input)::placeholder {
+  color: var(--sticky-panel-muted) !important;
+  opacity: 1;
+}
+
+.bn-form-popover
+  :is(.mantine-TextInput-section, .mantine-FileInput-section) {
+  width: 28px;
+  color: var(--sticky-panel-muted) !important;
+}
+
 .bn-color-picker-dropdown :is(.mantine-UnstyledButton-root, .mantine-ActionIcon-root) {
   border-color: var(--sticky-portal-menu-border-color, var(--bn-colors-border)) !important;
   color: var(--sticky-panel-text) !important;
@@ -3631,6 +3826,136 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
 .bn-color-picker-dropdown
   :is(.mantine-UnstyledButton-root:hover, .mantine-ActionIcon-root:hover) {
   background: var(--sticky-portal-menu-hover-bg, var(--bn-colors-hovered-background)) !important;
+}
+
+.bn-formatting-toolbar.notepane-formatting-toolbar {
+  display: grid;
+  width: 190px;
+  max-width: calc(100vw - 16px);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  overflow: visible;
+  padding: 7px;
+  border: 1px solid var(--sticky-portal-menu-border-color, var(--bn-colors-border));
+  border-radius: 10px;
+  background: var(--sticky-portal-menu-bg, var(--bn-colors-menu-background));
+  box-shadow: var(--sticky-portal-menu-shadow, var(--sticky-menu-shadow));
+  color: var(--sticky-panel-text, var(--bn-colors-menu-text));
+}
+
+.notepane-formatting-type-row {
+  min-width: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sticky-portal-menu-border-color, var(--bn-colors-border));
+}
+
+.notepane-formatting-type-row > .mantine-Menu-root,
+.notepane-formatting-type-row > .mantine-Button-root,
+.notepane-formatting-type-row .mantine-Button-root {
+  width: 100%;
+}
+
+.notepane-formatting-type-row .mantine-Button-root {
+  height: 32px;
+  min-height: 32px;
+  justify-content: flex-start;
+  padding-inline: 8px;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--sticky-panel-text, var(--bn-colors-menu-text)) !important;
+  font: 500 12px/1 var(--notepane-ui-font);
+}
+
+.notepane-formatting-type-row .mantine-Button-root:hover {
+  background: var(
+    --sticky-portal-menu-hover-bg,
+    var(--bn-colors-hovered-background)
+  ) !important;
+}
+
+.notepane-formatting-type-row .mantine-Button-label {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notepane-formatting-type-row .mantine-Button-section[data-position="left"] {
+  display: grid;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  margin-inline: 0 9px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sticky-panel-text) 7%, transparent);
+}
+
+.notepane-formatting-type-row
+  .mantine-Button-section[data-position="left"]
+  svg {
+  width: 16px;
+  height: 16px;
+}
+
+.notepane-formatting-type-row .mantine-Button-section[data-position="right"] {
+  margin-inline-start: auto;
+}
+
+.notepane-formatting-actions,
+.notepane-formatting-contextual-actions {
+  display: grid;
+  grid-template-columns: repeat(5, 30px);
+  gap: 3px;
+  align-items: center;
+}
+
+.notepane-formatting-contextual-actions:empty {
+  display: none;
+}
+
+.notepane-formatting-contextual-actions:not(:empty) {
+  padding-top: 6px;
+  border-top: 1px solid var(--sticky-portal-menu-border-color, var(--bn-colors-border));
+}
+
+.notepane-formatting-actions .mantine-ActionIcon-root,
+.notepane-formatting-contextual-actions .mantine-ActionIcon-root {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--sticky-panel-text, var(--bn-colors-menu-text)) !important;
+}
+
+.notepane-formatting-actions .mantine-ActionIcon-root:hover,
+.notepane-formatting-contextual-actions .mantine-ActionIcon-root:hover {
+  background: var(
+    --sticky-portal-menu-hover-bg,
+    var(--bn-colors-hovered-background)
+  ) !important;
+}
+
+.notepane-formatting-actions .mantine-ActionIcon-root[data-selected],
+.notepane-formatting-contextual-actions .mantine-ActionIcon-root[data-selected] {
+  background: var(
+    --sticky-portal-menu-hover-bg,
+    var(--bn-colors-selected-background)
+  ) !important;
+  color: var(--sticky-text-color, var(--bn-colors-selected-text)) !important;
+}
+
+.notepane-formatting-actions .mantine-ActionIcon-root svg,
+.notepane-formatting-contextual-actions .mantine-ActionIcon-root svg {
+  width: 17px;
+  height: 17px;
 }
 
 .notion-color-picker-dropdown {

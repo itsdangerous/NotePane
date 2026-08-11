@@ -3809,12 +3809,41 @@ test("highlights the active block while its six-dot menu is open", async ({ page
   expect(darkHighlight.boxShadow).not.toBe(lightHighlight.boxShadow);
 });
 
-test("shows table interaction UI when a table cell is selected", async ({ page }) => {
+test("focuses table cells without changing their drag selection behavior", async ({ page }) => {
   await loadTemplatePreview(page);
-  await page.getByRole("cell", { name: "Tabs" }).first().click();
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const activeCell = page.getByRole("cell", { name: "Tabs" }).first();
+  await activeCell.getByText("Tabs", { exact: true }).click();
+
+  await expect(page.locator(".notepane-table-cell-focus-ring"))
+    .toHaveAttribute("data-cell-text", "Tabs");
 
   await expect(page.locator(".bn-table-handle, .bn-table-cell-handle").first())
     .toBeVisible();
+
+  await page.keyboard.press("Tab");
+  await expect.poll(() => page.evaluate(() => {
+    const selection = window.getSelection();
+    const node = selection?.focusNode;
+    const cell = (node instanceof Element ? node : node?.parentElement)?.closest("td, th");
+    return {
+      cellText: cell?.textContent,
+      offset: selection?.focusOffset,
+      textLength: node?.textContent?.length,
+    };
+  })).toMatchObject({
+    cellText: "Drafting, comparing, and organizing sessions",
+    offset: "Drafting, comparing, and organizing sessions".length,
+    textLength: "Drafting, comparing, and organizing sessions".length,
+  });
+
+  await page.keyboard.press(modifierShortcut("A"));
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString()))
+    .toBe("Drafting, comparing, and organizing sessions");
+
+  await page.keyboard.press(modifierShortcut("A"));
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString()))
+    .toContain("NotePane");
 });
 
 test("deletes the current block with Command+X when no text is selected", async ({ page }) => {

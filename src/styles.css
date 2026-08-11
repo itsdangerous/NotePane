@@ -70,6 +70,7 @@ body.theme-light,
   --sticky-muted-color: #787774;
   --sticky-border-color: rgb(55 53 47 / 0.12);
   --sticky-table-border-color: #8f8e89;
+  --sticky-table-focused-border-color: #5c70c6;
   --sticky-table-control-border-color: #d2d1ce;
   --sticky-table-control-bg: #f2f2f0;
   --sticky-table-control-hover-bg: #ededeb;
@@ -200,6 +201,7 @@ body.theme-dark,
   --sticky-muted-color: #a5a5a1;
   --sticky-border-color: rgb(255 255 255 / 0.12);
   --sticky-table-border-color: #747471;
+  --sticky-table-focused-border-color: #a8bcff;
   --sticky-table-control-border-color: #4b4b4a;
   --sticky-table-control-bg: #161616;
   --sticky-table-control-hover-bg: #151515;
@@ -3620,6 +3622,16 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
 .bn-editor td,
 .bn-editor .bn-table-cell {
   border-color: var(--sticky-table-border-color, var(--bn-colors-border)) !important;
+}
+
+.notepane-table-cell-focus-ring {
+  position: fixed;
+  z-index: 4;
+  box-sizing: border-box;
+  border: 2px solid var(--sticky-table-focused-border-color);
+  pointer-events: none;
+  transition: 120ms ease-out;
+  transition-property: top, left, width, height, border-color;
 }
 
 .bn-editor .bn-block-outer > .bn-block {

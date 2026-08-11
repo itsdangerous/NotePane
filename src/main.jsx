@@ -1196,6 +1196,26 @@ function StickyEditor({
   }, [editor]);
 
   const [title, setTitle] = useState(initialDisplayTitle);
+  const tableCellSelectAllRef = useRef(null);
+  const [focusedTableCellRect, setFocusedTableCellRect] = useState(null);
+  const updateFocusedTableCell = useCallback(() => {
+    const selection = window.getSelection();
+    const selectionNode = selection?.focusNode;
+    const cell = (selectionNode instanceof Element ? selectionNode : selectionNode?.parentElement)
+      ?.closest("td, th");
+    if (!selection?.isCollapsed || !cell || cell.classList.contains("selectedCell")) {
+      setFocusedTableCellRect(null);
+      return;
+    }
+    const rect = cell.getBoundingClientRect();
+    setFocusedTableCellRect({
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+      text: cell.textContent?.trim() || "",
+    });
+  }, []);
   const [theme, setTheme] = useState(normalizeTheme(note.theme));
   const normalizedEditorPreferences = useMemo(
     () => normalizeEditorPreferences(editorPreferences),
@@ -2228,6 +2248,22 @@ function StickyEditor({
 
       if (key === "a") {
         event.preventDefault();
+        const tableCellRange = getCurrentTableCellRange(
+          editor.prosemirrorView?.state.selection,
+        );
+        if (tableCellRange && tableCellSelectAllRef.current === tableCellRange.cellPos) {
+          tableCellSelectAllRef.current = null;
+          selectAllBlocks(editor);
+          return;
+        }
+        if (
+          editor.prosemirrorView?.state.selection.empty &&
+          selectCurrentTableCellContent(editor)
+        ) {
+          tableCellSelectAllRef.current = tableCellRange?.cellPos ?? null;
+          return;
+        }
+        tableCellSelectAllRef.current = null;
         if (isSelectionInsideCodeBlock(editor)) {
           selectCurrentCodeBlockContent(editor);
           return;
@@ -2270,10 +2306,28 @@ function StickyEditor({
       });
     };
 
+    const handleTableTabKeyDownCapture = (event) => {
+      if (
+        event.key !== "Tab" ||
+        !isEditorShortcutTarget(event.target) ||
+        !editor.prosemirrorView?.state.selection.empty
+      ) {
+        return;
+      }
+
+      if (moveTableTextCursorToAdjacentCell(editor, event.shiftKey ? -1 : 1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditorActive(true);
+      }
+    };
+
     document.addEventListener("keydown", handleEditorKeyDownCapture, true);
+    document.addEventListener("keydown", handleTableTabKeyDownCapture, true);
     document.addEventListener("keydown", handleEditorTabKeyDown);
     return () => {
       document.removeEventListener("keydown", handleEditorKeyDownCapture, true);
+      document.removeEventListener("keydown", handleTableTabKeyDownCapture, true);
       document.removeEventListener("keydown", handleEditorTabKeyDown);
     };
   }, [
@@ -3544,7 +3598,13 @@ function StickyEditor({
               setIsEditorActive(false);
             }
           }}
-          onPointerDownCapture={() => setIsEditorActive(true)}
+          onPointerDownCapture={() => {
+            setIsEditorActive(true);
+            tableCellSelectAllRef.current = null;
+          }}
+          onPointerUpCapture={() => {
+            window.requestAnimationFrame(updateFocusedTableCell);
+          }}
           onMouseDown={focusLastBlockFromEmptySurface}
         >
           {editorFontSizeToast && (
@@ -3555,6 +3615,18 @@ function StickyEditor({
             >
               {editorFontSizeToast}
             </div>
+          )}
+          {focusedTableCellRect && (
+            <div
+              className="notepane-table-cell-focus-ring"
+              data-cell-text={focusedTableCellRect.text}
+              style={{
+                top: focusedTableCellRect.top,
+                left: focusedTableCellRect.left,
+                width: focusedTableCellRect.width,
+                height: focusedTableCellRect.height,
+              }}
+            />
           )}
           {isTableOfContentsVisible && (
             <TableOfContentsRail
@@ -3591,6 +3663,9 @@ function StickyEditor({
             editor={editor}
             theme={appThemeMode}
             onChange={handleEditorChange}
+            onSelectionChange={() => {
+              window.requestAnimationFrame(updateFocusedTableCell);
+            }}
             portalElements={{ default: document.body }}
             formattingToolbar={false}
           >
@@ -9447,6 +9522,105 @@ function selectCurrentCodeBlockContent(editor) {
   );
   view.focus();
   return true;
+}
+
+function selectCurrentTableCellContent(editor) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  const cellRange = getCurrentTableCellRange(state?.selection);
+  if (!view || !state || !cellRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(TextSelection.between(
+        state.doc.resolve(cellRange.from),
+        state.doc.resolve(cellRange.to),
+      ))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
+function moveTableTextCursorToAdjacentCell(editor, direction) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  const currentCellRange = getCurrentTableCellRange(state?.selection);
+  if (!view || !state || !currentCellRange) {
+    return false;
+  }
+
+  let tableDepth = null;
+  for (let depth = state.selection.$from.depth; depth > 0; depth -= 1) {
+    if (state.selection.$from.node(depth).type.spec.tableRole === "table") {
+      tableDepth = depth;
+      break;
+    }
+  }
+  if (tableDepth === null) {
+    return false;
+  }
+
+  const tablePosition = state.selection.$from.before(tableDepth);
+  const cellPositions = [];
+  state.selection.$from.node(tableDepth).descendants((node, position) => {
+    const tableRole = node.type.spec.tableRole;
+    if (tableRole === "cell" || tableRole === "header_cell") {
+      cellPositions.push(tablePosition + position + 1);
+    }
+  });
+  const currentIndex = cellPositions.indexOf(currentCellRange.cellPos);
+  const nextCellPosition = cellPositions[currentIndex + direction];
+  if (currentIndex < 0 || typeof nextCellPosition !== "number") {
+    return false;
+  }
+
+  const nextCellRange = getCurrentTableCellRange({
+    $from: state.doc.resolve(nextCellPosition + 1),
+  });
+  if (!nextCellRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(TextSelection.near(state.doc.resolve(nextCellRange.to), -1))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
+function getCurrentTableCellRange(selection) {
+  if (!selection) {
+    return null;
+  }
+
+  const cellAnchor = selection.$anchorCell;
+  if (cellAnchor?.nodeAfter?.type.spec.tableRole) {
+    const cellNode = cellAnchor.nodeAfter;
+    return {
+      from: cellAnchor.pos + 1,
+      to: cellAnchor.pos + cellNode.nodeSize - 1,
+      cellPos: cellAnchor.pos,
+    };
+  }
+
+  const { $from } = selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const tableRole = $from.node(depth).type.spec.tableRole;
+    if (tableRole === "cell" || tableRole === "header_cell") {
+      return {
+        from: $from.start(depth),
+        to: $from.end(depth),
+        cellPos: $from.before(depth),
+      };
+    }
+  }
+
+  return null;
 }
 
 function selectAllEditorDocument(editor) {

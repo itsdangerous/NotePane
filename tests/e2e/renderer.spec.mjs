@@ -515,6 +515,17 @@ test("shows table of contents in tab mode only when enabled from preferences", a
     "tabs",
   );
   await expect(page.getByTestId("editor-toc")).toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("Shift+T"));
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "sticky",
+  );
+  await page.keyboard.press(modifierShortcut("Shift+T"));
+  await expect(page.getByTestId("sticky-shell")).toHaveAttribute(
+    "data-layout-mode",
+    "tabs",
+  );
 });
 
 test("keeps tab and command select-all outside the editor from moving chrome focus or selecting chrome", async ({ page }) => {
@@ -1271,6 +1282,7 @@ async function expectStickyTableChromeReadable(page) {
   await expect(page.locator(".bn-extend-button").first()).toBeVisible();
   await expect(page.locator(".bn-table-handle, .bn-table-cell-handle").first())
     .toBeVisible();
+  await expect(page.locator(".bn-table-cell-handle").first()).toBeHidden();
   await expect.poll(() => getStickyTableChromeSnapshot(page)).toMatchObject({
     hasExtendButton: true,
     hasTableHandle: true,
@@ -3696,6 +3708,9 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
 
   const blockMenu = page.locator(".bn-drag-handle-menu:visible");
   await expect(blockMenu).toBeVisible();
+  await expect(blockMenu.getByRole("menuitem")).toHaveCount(2);
+  await expect(blockMenu.locator(".notepane-block-menu-item-content svg"))
+    .toHaveCount(2);
   await expectBlockNoteFloatingMenuInsideViewport(page, ".bn-drag-handle-menu", 60);
   const blockMenuTopBeforeColors = await blockMenu.evaluate((element) =>
     Math.round(element.getBoundingClientRect().top),
@@ -3752,10 +3767,19 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
     finalParagraphBox.y + finalParagraphBox.height / 2,
   );
   await openBlockMenuButton.click();
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.keyboard.press("Delete");
 
   await expect(page.locator(".bn-editor").getByText("Objective:", { exact: true }))
     .toHaveCount(0);
+
+  const table = page.getByRole("table");
+  const tableBox = await table.boundingBox();
+  await page.mouse.move(tableBox.x + 20, tableBox.y + 20);
+  await expect(openBlockMenuButton).toBeVisible();
+  await openBlockMenuButton.click();
+  await expect(page.locator(".bn-drag-handle-menu:visible").getByRole("menuitem"))
+    .toHaveCount(2);
+  await expect(page.getByRole("menuitem", { name: /header/i })).toHaveCount(0);
 });
 
 test("highlights the active block while its six-dot menu is open", async ({ page }) => {
@@ -3817,10 +3841,87 @@ test("focuses table cells without changing their drag selection behavior", async
 
   await expect(page.locator(".notepane-table-cell-focus-ring"))
     .toHaveAttribute("data-cell-text", "Tabs");
+  const focusedCellStyle = await page.locator(".notepane-table-cell-focus-ring")
+    .evaluate((ring) => {
+      const style = getComputedStyle(ring);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderWidth: style.borderWidth,
+        boxShadow: style.boxShadow,
+      };
+    });
+  expect(focusedCellStyle).toEqual({
+    backgroundColor: "rgba(0, 0, 0, 0)",
+    borderWidth: "0px",
+    boxShadow: "rgba(139, 92, 246, 0.58) 0px 0px 0px 2px inset",
+  });
+  await expect.poll(() => page.locator(".notepane-table-cell-focus-ring")
+    .evaluate((ring) => {
+      const rect = ring.getBoundingClientRect();
+      const pixelRatio = window.devicePixelRatio || 1;
+      return [rect.top, rect.right, rect.bottom, rect.left]
+        .every((edge) => Number.isInteger(edge * pixelRatio));
+    })).toBe(true);
 
   await expect(page.locator(".bn-table-handle, .bn-table-cell-handle").first())
     .toBeVisible();
 
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".bn-editor .selectedCell"))
+    .toHaveText("Tabs");
+  const singleCellSelectionStyle = await page.locator(".bn-editor .selectedCell")
+    .evaluate((cell) => {
+      const style = getComputedStyle(cell, "::after");
+      return {
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+      };
+    });
+  expect(singleCellSelectionStyle).toEqual({
+    backgroundColor: "rgba(139, 92, 246, 0.12)",
+    boxShadow: "none",
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".bn-editor"))
+    .not.toHaveClass(/ProseMirror-focused/);
+  await expect.poll(() => page.locator(".bn-editor .selectedCell").evaluate((cell) => (
+    getComputedStyle(cell, "::after").backgroundColor
+  ))).toBe("rgba(0, 0, 0, 0)");
+  await expect(page.locator(".bn-formatting-toolbar:visible")).toHaveCount(0);
+
+  await activeCell.getByText("Tabs", { exact: true }).click();
+  await page.keyboard.press("Escape");
+  const nextCell = page.getByRole("cell", {
+    name: "Drafting, comparing, and organizing sessions",
+  }).first();
+  await nextCell.click({ modifiers: ["Shift"] });
+  await expect(page.getByTestId("sticky-editor-surface"))
+    .toHaveClass(/has-multi-table-cell-selection/);
+  const multiCellSelectionStyle = await page.locator(".bn-editor .selectedCell")
+    .first()
+    .evaluate((cell) => {
+      const style = getComputedStyle(cell, "::after");
+      return {
+        backgroundColor: style.backgroundColor,
+        boxShadow: style.boxShadow,
+      };
+    });
+  expect(multiCellSelectionStyle).toEqual({
+    backgroundColor: "rgba(139, 92, 246, 0.12)",
+    boxShadow: "none",
+  });
+
+  await activeCell.getByText("Tabs", { exact: true }).click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".bn-editor .selectedCell"))
+    .toHaveText("Drafting, comparing, and organizing sessions");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".bn-editor .selectedCell"))
+    .toHaveText("Keeping an active note above other windows");
+
+  await activeCell.getByText("Tabs", { exact: true }).click();
   await page.keyboard.press("Tab");
   await expect.poll(() => page.evaluate(() => {
     const selection = window.getSelection();
@@ -3844,6 +3945,110 @@ test("focuses table cells without changing their drag selection behavior", async
   await page.keyboard.press(modifierShortcut("A"));
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString()))
     .toContain("NotePane");
+});
+
+test("merges and splits selected table cells with Command+Shift+M", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const firstCell = page.getByRole("cell", { name: "Tabs" }).first();
+  const nextCell = page.getByRole("cell", {
+    name: "Drafting, comparing, and organizing sessions",
+  }).first();
+  await firstCell.click();
+  await page.keyboard.press("Escape");
+  await nextCell.click({ modifiers: ["Shift"] });
+
+  const formattingToolbar = page.locator(".bn-formatting-toolbar:visible");
+  await expect(formattingToolbar).toBeVisible();
+  await expect(formattingToolbar.locator(".notepane-formatting-type-row"))
+    .toHaveCount(0);
+  const mergeButton = formattingToolbar.getByRole("button", {
+    name: "Merge selected cells",
+  });
+  await expect(mergeButton).toBeVisible();
+  const mergeIconSize = await mergeButton.locator("svg").evaluate((icon) => {
+    const rect = icon.getBoundingClientRect();
+    return { height: rect.height, width: rect.width };
+  });
+  expect(mergeIconSize).toEqual({ height: 21, width: 21 });
+  await mergeButton.hover();
+  const mergeTooltip = page.locator(".bn-tooltip:visible");
+  await expect(mergeTooltip).toContainText("Merge selected cells");
+  await expect(mergeTooltip).toContainText(/M/);
+
+  const firstTableRow = page.getByRole("table").getByRole("row").nth(1);
+  await expect(firstTableRow.getByRole("cell")).toHaveCount(3);
+  await page.keyboard.press(modifierShortcut("Shift+M"));
+  await expect(firstTableRow.getByRole("cell")).toHaveCount(2);
+
+  const mergedCell = firstTableRow.getByRole("cell").first();
+  await mergedCell.click();
+  await page.keyboard.press("Escape");
+  const splitButton = page.locator(".bn-formatting-toolbar:visible").getByRole(
+    "button",
+    { name: "Split merged cell" },
+  );
+  await expect(splitButton).toBeVisible();
+  await splitButton.hover();
+  const splitTooltip = page.locator(".bn-tooltip:visible");
+  await expect(splitTooltip).toContainText("Split merged cell");
+  await expect(splitTooltip).toContainText(/M/);
+  await page.keyboard.press(modifierShortcut("Shift+M"));
+  await expect(firstTableRow.getByRole("cell")).toHaveCount(3);
+});
+
+test("resizes selected table cells live and auto-fits columns on double click", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const cell = page.getByRole("cell", { name: "Tabs" }).first();
+  await cell.click();
+
+  const dragColumnEdge = async (distance) => {
+    const box = await cell.boundingBox();
+    await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      box.x + box.width - 1 + distance,
+      box.y + box.height / 2,
+      { steps: 5 },
+    );
+  };
+
+  const initialWidth = (await cell.boundingBox()).width;
+  await dragColumnEdge(60);
+  const liveFocusedWidth = (await cell.boundingBox()).width;
+  expect(liveFocusedWidth).toBeGreaterThan(initialWidth + 40);
+  await expect.poll(async () => (
+    await page.locator(".notepane-table-cell-focus-ring").boundingBox()
+  )?.width).toBeCloseTo(liveFocusedWidth, 0);
+  await page.mouse.up();
+
+  await page.keyboard.press("Escape");
+  await expect(cell).toHaveClass(/selectedCell/);
+  const selectedWidthBeforeDrag = (await cell.boundingBox()).width;
+  await expect(page.locator(".bn-formatting-toolbar:visible"))
+    .toHaveClass(/is-table-context/);
+  const selectedBox = await cell.boundingBox();
+  await expect(page.evaluate(({ x, y }) => (
+    document.elementFromPoint(x, y)?.closest("td, th") !== null
+  ), {
+    x: selectedBox.x + selectedBox.width - 1,
+    y: selectedBox.y + selectedBox.height / 2,
+  })).resolves.toBe(true);
+  await dragColumnEdge(40);
+  expect((await cell.boundingBox()).width)
+    .toBeGreaterThan(selectedWidthBeforeDrag + 25);
+  await page.mouse.up();
+
+  const widenedWidth = (await cell.boundingBox()).width;
+  const widenedBox = await cell.boundingBox();
+  await page.mouse.dblclick(
+    widenedBox.x + widenedBox.width - 1,
+    widenedBox.y + widenedBox.height / 2,
+  );
+  await expect.poll(async () => (await cell.boundingBox()).width)
+    .toBeLessThan(widenedWidth - 40);
+  expect((await cell.boundingBox()).width).toBeLessThan(90);
 });
 
 test("deletes the current block with Command+X when no text is selected", async ({ page }) => {

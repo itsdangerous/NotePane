@@ -160,7 +160,7 @@ const DEFAULT_KEYBOARD_SHORTCUTS = Object.freeze({
   moveTabLeft: "Mod+Shift+[",
   moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
-  toggleLayoutMode: "Mod+Shift+M",
+  toggleLayoutMode: "Mod+Shift+T",
   toggleTableOfContents: "Mod+Shift+O",
   toggleThemeMode: "Mod+Shift+L",
   exportPdf: "Mod+Shift+E",
@@ -183,6 +183,7 @@ const DEFAULT_KEYBOARD_SHORTCUT_ENABLED = Object.freeze(
 const LEGACY_DEFAULT_TOGGLE_SIDEBAR_SHORTCUT = "Mod+B";
 const LEGACY_DEFAULT_MOVE_TAB_LEFT_SHORTCUT = "Mod+Shift+ArrowLeft";
 const LEGACY_DEFAULT_MOVE_TAB_RIGHT_SHORTCUT = "Mod+Shift+ArrowRight";
+const LEGACY_DEFAULT_TOGGLE_LAYOUT_MODE_SHORTCUT = "Mod+Shift+M";
 const DEFAULT_EDITOR_PREFERENCES = Object.freeze({
   editorFontScale: DEFAULT_EDITOR_FONT_SCALE,
   editorFontFamily: DEFAULT_EDITOR_FONT_FAMILY,
@@ -654,7 +655,7 @@ class StickyStore {
 
   save() {
     writeJsonAtomic(this.filePath, {
-      version: 10,
+      version: 11,
       appTheme: this.state.appTheme,
       layoutMode: this.state.layoutMode,
       editorPreferences: this.state.editorPreferences,
@@ -1050,6 +1051,15 @@ function migrateLegacyEditorPreferences(value, version = 1) {
   ) {
     nextKeyboardShortcuts.moveTabRight =
       DEFAULT_KEYBOARD_SHORTCUTS.moveTabRight;
+  }
+
+  if (
+    version < 11 &&
+    normalizeKeyboardShortcut(keyboardShortcuts.toggleLayoutMode) ===
+      LEGACY_DEFAULT_TOGGLE_LAYOUT_MODE_SHORTCUT
+  ) {
+    nextKeyboardShortcuts.toggleLayoutMode =
+      DEFAULT_KEYBOARD_SHORTCUTS.toggleLayoutMode;
   }
 
   return {

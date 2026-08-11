@@ -1,4 +1,7 @@
 import { useCallback } from "react";
+import { formatKeyboardShortcut } from "@blocknote/core";
+import { TableHandlesExtension } from "@blocknote/core/extensions";
+import { Combine, SplitSquareHorizontal } from "lucide-react";
 import {
   BasicTextStyleButton,
   BlockTypeSelect,
@@ -9,6 +12,7 @@ import {
   useBlockNoteEditor,
   useComponentsContext,
   useEditorState,
+  useExtension,
 } from "@blocknote/react";
 
 const EDITOR_COLOR_VALUES = [
@@ -25,7 +29,6 @@ const EDITOR_COLOR_VALUES = [
 ];
 const RECENT_EDITOR_COLOR_LIMIT = 5;
 const CONTEXTUAL_FORMATTING_TOOL_KEYS = new Set([
-  "tableCellMergeButton",
   "fileCaptionButton",
   "replaceFileButton",
   "fileRenameButton",
@@ -75,6 +78,7 @@ export function RecentColorFormattingToolbarController({
   recentColors,
   onColorUsed,
   portalElement,
+  hidden = false,
 }) {
   const Toolbar = useCallback(
     (props) => (
@@ -86,6 +90,10 @@ export function RecentColorFormattingToolbarController({
     ),
     [onColorUsed, recentColors],
   );
+
+  if (hidden) {
+    return null;
+  }
 
   return (
     <FormattingToolbarController
@@ -102,6 +110,23 @@ function RecentColorFormattingToolbar({
   onColorUsed,
 }) {
   const Components = useComponentsContext();
+  const editor = useBlockNoteEditor();
+  const isInsideTableCell = useEditorState({
+    editor,
+    selector: ({ editor: currentEditor }) => {
+      const selection = currentEditor.prosemirrorState.selection;
+      if (selection.$anchorCell) {
+        return true;
+      }
+
+      for (let depth = selection.$from.depth; depth > 0; depth -= 1) {
+        if (selection.$from.node(depth).type.spec.tableRole?.endsWith("cell")) {
+          return true;
+        }
+      }
+      return false;
+    },
+  });
   const contextualItems = getFormattingToolbarItems(blockTypeSelectItems).filter(
     (item) => CONTEXTUAL_FORMATTING_TOOL_KEYS.has(item.key),
   );
@@ -112,11 +137,16 @@ function RecentColorFormattingToolbar({
 
   return (
     <Components.FormattingToolbar.Root
-      className="bn-toolbar bn-formatting-toolbar notepane-formatting-toolbar"
+      className={[
+        "bn-toolbar bn-formatting-toolbar notepane-formatting-toolbar",
+        isInsideTableCell ? "is-table-context" : "",
+      ].filter(Boolean).join(" ")}
     >
-      <div className="notepane-formatting-type-row">
-        <BlockTypeSelect items={blockTypeSelectItems} />
-      </div>
+      {!isInsideTableCell && (
+        <div className="notepane-formatting-type-row">
+          <BlockTypeSelect items={blockTypeSelectItems} />
+        </div>
+      )}
       <div
         className="notepane-formatting-actions"
         role="group"
@@ -142,8 +172,55 @@ function RecentColorFormattingToolbar({
         aria-label="Selected item actions"
       >
         {contextualItems}
+        <TableCellMergeSplitButton />
       </div>
     </Components.FormattingToolbar.Root>
+  );
+}
+
+function TableCellMergeSplitButton() {
+  const Components = useComponentsContext();
+  const editor = useBlockNoteEditor();
+  const tableHandles = useExtension(TableHandlesExtension);
+  const action = useEditorState({
+    editor,
+    selector: ({ editor: currentEditor }) => {
+      const selection = currentEditor.prosemirrorState.selection;
+      const selectedCell = selection.$anchorCell?.nodeAfter;
+      if (!selection.$anchorCell || !selection.$headCell || !selectedCell) {
+        return null;
+      }
+      if (selection.$anchorCell.pos !== selection.$headCell.pos) {
+        return "merge";
+      }
+      return selectedCell.attrs.colspan > 1 || selectedCell.attrs.rowspan > 1
+        ? "split"
+        : null;
+    },
+  });
+
+  if (!Components || !action) {
+    return null;
+  }
+
+  const isMerge = action === "merge";
+  const label = isMerge ? "Merge selected cells" : "Split merged cell";
+
+  return (
+    <Components.FormattingToolbar.Button
+      className="bn-button notepane-table-merge-split-button"
+      label={label}
+      mainTooltip={label}
+      secondaryTooltip={formatKeyboardShortcut("Mod-Shift-M")}
+      icon={isMerge ? <Combine /> : <SplitSquareHorizontal />}
+      onClick={() => {
+        if (isMerge) {
+          tableHandles.mergeCells();
+        } else {
+          tableHandles.splitCell();
+        }
+      }}
+    />
   );
 }
 

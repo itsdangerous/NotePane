@@ -20,6 +20,7 @@ import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
 import { useCreateBlockNote } from "@blocknote/react";
 import { TextSelection } from "@tiptap/pm/state";
+import { CellSelection, mergeCells, splitCell } from "prosemirror-tables";
 import {
   Check,
   Cog,
@@ -45,7 +46,14 @@ import {
   RecentColorFormattingToolbarController,
   rememberEditorColor,
 } from "./editorColorFormatting.jsx";
-import { BlockMenuHighlightController } from "./editorSideMenu.jsx";
+import {
+  BlockMenuHighlightController,
+  NotePaneSideMenuController,
+} from "./editorSideMenu.jsx";
+import {
+  autoFitActiveTableColumn,
+  previewActiveTableColumnResize,
+} from "./tableColumnSizing.js";
 import "./styles.css";
 
 const NOTE_PANE_TEMPLATE_BLOCKS = [
@@ -304,7 +312,7 @@ const DEFAULT_KEYBOARD_SHORTCUTS = {
   moveTabLeft: "Mod+Shift+[",
   moveTabRight: "Mod+Shift+]",
   toggleSidebar: "Mod+Shift+B",
-  toggleLayoutMode: "Mod+Shift+M",
+  toggleLayoutMode: "Mod+Shift+T",
   toggleTableOfContents: "Mod+Shift+O",
   toggleThemeMode: "Mod+Shift+L",
   exportPdf: "Mod+Shift+E",
@@ -1197,25 +1205,70 @@ function StickyEditor({
 
   const [title, setTitle] = useState(initialDisplayTitle);
   const tableCellSelectAllRef = useRef(null);
+  const focusedTableCellElementRef = useRef(null);
+  const focusedTableCellResizeObserverRef = useRef(null);
   const [focusedTableCellRect, setFocusedTableCellRect] = useState(null);
+  const [isTableCellSelectionDismissed, setIsTableCellSelectionDismissed] =
+    useState(false);
+  const [isMultiTableCellSelection, setIsMultiTableCellSelection] = useState(
+    false,
+  );
   const updateFocusedTableCell = useCallback(() => {
     const selection = window.getSelection();
     const selectionNode = selection?.focusNode;
     const cell = (selectionNode instanceof Element ? selectionNode : selectionNode?.parentElement)
       ?.closest("td, th");
     if (!selection?.isCollapsed || !cell || cell.classList.contains("selectedCell")) {
+      focusedTableCellResizeObserverRef.current?.disconnect();
+      focusedTableCellElementRef.current = null;
       setFocusedTableCellRect(null);
       return;
     }
+    if (focusedTableCellElementRef.current !== cell) {
+      focusedTableCellResizeObserverRef.current?.disconnect();
+      focusedTableCellElementRef.current = cell;
+      focusedTableCellResizeObserverRef.current?.observe(cell);
+    }
     const rect = cell.getBoundingClientRect();
+    const pixelRatio = window.devicePixelRatio || 1;
+    const snapToDevicePixel = (value) => (
+      Math.round(value * pixelRatio) / pixelRatio
+    );
+    const left = snapToDevicePixel(rect.left);
+    const top = snapToDevicePixel(rect.top);
+    const right = snapToDevicePixel(rect.right);
+    const bottom = snapToDevicePixel(rect.bottom);
     setFocusedTableCellRect({
-      top: rect.top,
-      left: rect.left,
-      width: rect.width,
-      height: rect.height,
+      top,
+      left,
+      width: right - left,
+      height: bottom - top,
       text: cell.textContent?.trim() || "",
     });
   }, []);
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(updateFocusedTableCell);
+    });
+    focusedTableCellResizeObserverRef.current = observer;
+    if (focusedTableCellElementRef.current) {
+      observer.observe(focusedTableCellElementRef.current);
+    }
+    return () => {
+      observer.disconnect();
+      focusedTableCellResizeObserverRef.current = null;
+    };
+  }, [updateFocusedTableCell]);
+  const updateTableCellSelectionMode = useCallback(() => {
+    const selection = editor.prosemirrorView?.state.selection;
+    setIsMultiTableCellSelection(
+      Boolean(
+        selection?.$anchorCell &&
+          selection?.$headCell &&
+          selection.$anchorCell.pos !== selection.$headCell.pos,
+      ),
+    );
+  }, [editor]);
   const [theme, setTheme] = useState(normalizeTheme(note.theme));
   const normalizedEditorPreferences = useMemo(
     () => normalizeEditorPreferences(editorPreferences),
@@ -2322,12 +2375,129 @@ function StickyEditor({
       }
     };
 
+    const handleTableCellArrowKeyDownCapture = (event) => {
+      if (
+        !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !isEditorShortcutTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (moveSelectedTableCell(editor, event.key)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditorActive(true);
+      }
+    };
+
+    const handleTableCellModeEscapeKeyDownCapture = (event) => {
+      const view = editor.prosemirrorView;
+      const selection = view?.state.selection;
+      if (
+        event.key !== "Escape" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !isEditorShortcutTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (selection?.$anchorCell && selection?.$headCell) {
+        event.preventDefault();
+        event.stopPropagation();
+        view.dom.blur();
+        setIsTableCellSelectionDismissed(true);
+        setIsEditorActive(false);
+        return;
+      }
+
+      if (!selection?.empty) {
+        return;
+      }
+
+      if (selectCurrentTableCell(editor)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditorActive(true);
+      }
+    };
+
+    const handleTableCellMergeSplitKeyDownCapture = (event) => {
+      if (
+        event.key.toLowerCase() !== "m" ||
+        !(event.metaKey || event.ctrlKey) ||
+        !event.shiftKey ||
+        event.altKey ||
+        !isEditorShortcutTarget(event.target)
+      ) {
+        return;
+      }
+
+      const view = editor.prosemirrorView;
+      const selection = view?.state.selection;
+      if (!view || !selection?.$anchorCell || !selection?.$headCell) {
+        return;
+      }
+
+      const selectedCell = selection.$anchorCell.nodeAfter;
+      const isSingleCell = selection.$anchorCell.pos === selection.$headCell.pos;
+      const isMergedCell = Boolean(
+        selectedCell &&
+          (selectedCell.attrs.colspan > 1 || selectedCell.attrs.rowspan > 1),
+      );
+      const command = isSingleCell && isMergedCell ? splitCell : mergeCells;
+      if (command(view.state, view.dispatch)) {
+        event.preventDefault();
+        event.stopPropagation();
+        view.focus();
+      }
+    };
+
+    const handleTableColumnDoubleClickCapture = (event) => {
+      if (
+        event.button !== 0 ||
+        !isEditorShortcutTarget(event.target) ||
+        !(event.target instanceof Element) ||
+        !event.target.closest("td, th")
+      ) {
+        return;
+      }
+
+      if (autoFitActiveTableColumn(editor, event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.requestAnimationFrame(updateFocusedTableCell);
+      }
+    };
+
+    const handleTableColumnResizeMouseMoveCapture = (event) => {
+      if (previewActiveTableColumnResize(editor, event)) {
+        window.requestAnimationFrame(updateFocusedTableCell);
+      }
+    };
+
     document.addEventListener("keydown", handleEditorKeyDownCapture, true);
     document.addEventListener("keydown", handleTableTabKeyDownCapture, true);
+    document.addEventListener("keydown", handleTableCellArrowKeyDownCapture, true);
+    document.addEventListener("keydown", handleTableCellModeEscapeKeyDownCapture, true);
+    document.addEventListener("keydown", handleTableCellMergeSplitKeyDownCapture, true);
+    document.addEventListener("dblclick", handleTableColumnDoubleClickCapture, true);
+    window.addEventListener("mousemove", handleTableColumnResizeMouseMoveCapture, true);
     document.addEventListener("keydown", handleEditorTabKeyDown);
     return () => {
       document.removeEventListener("keydown", handleEditorKeyDownCapture, true);
       document.removeEventListener("keydown", handleTableTabKeyDownCapture, true);
+      document.removeEventListener("keydown", handleTableCellArrowKeyDownCapture, true);
+      document.removeEventListener("keydown", handleTableCellModeEscapeKeyDownCapture, true);
+      document.removeEventListener("keydown", handleTableCellMergeSplitKeyDownCapture, true);
+      document.removeEventListener("dblclick", handleTableColumnDoubleClickCapture, true);
+      window.removeEventListener("mousemove", handleTableColumnResizeMouseMoveCapture, true);
       document.removeEventListener("keydown", handleEditorTabKeyDown);
     };
   }, [
@@ -2336,6 +2506,7 @@ function StickyEditor({
     isEditorActive,
     recentEditorColors,
     scheduleSave,
+    updateFocusedTableCell,
   ]);
 
   useEffect(() => {
@@ -3583,11 +3754,15 @@ function StickyEditor({
             "sticky-editor-surface",
             isTableOfContentsVisible ? "has-table-of-contents" : "",
             note.seedDemoContent ? "is-template-session" : "",
+            isMultiTableCellSelection ? "has-multi-table-cell-selection" : "",
           ].filter(Boolean).join(" ")}
           data-testid="sticky-editor-surface"
           data-editor-active={isEditorActive ? "true" : "false"}
           data-toc-visible={isTableOfContentsVisible ? "true" : "false"}
-          onFocusCapture={() => setIsEditorActive(true)}
+          onFocusCapture={() => {
+            setIsEditorActive(true);
+            setIsTableCellSelectionDismissed(false);
+          }}
           onBlurCapture={(event) => {
             const nextTarget = event.relatedTarget;
             if (
@@ -3600,6 +3775,7 @@ function StickyEditor({
           }}
           onPointerDownCapture={() => {
             setIsEditorActive(true);
+            setIsTableCellSelectionDismissed(false);
             tableCellSelectAllRef.current = null;
           }}
           onPointerUpCapture={() => {
@@ -3664,17 +3840,23 @@ function StickyEditor({
             theme={appThemeMode}
             onChange={handleEditorChange}
             onSelectionChange={() => {
-              window.requestAnimationFrame(updateFocusedTableCell);
+              window.requestAnimationFrame(() => {
+                updateFocusedTableCell();
+                updateTableCellSelectionMode();
+              });
             }}
             portalElements={{ default: document.body }}
             formattingToolbar={false}
+            sideMenu={false}
           >
             <RecentColorFormattingToolbarController
               recentColors={recentEditorColors}
               onColorUsed={onEditorColorUsed}
               portalElement={document.body}
+              hidden={isTableCellSelectionDismissed}
             />
             <BlockMenuHighlightController />
+            <NotePaneSideMenuController />
           </BlockNoteView>
           {codeBlockToolTargets.map(({ blockId, element }) => (
             <CodeBlockTools
@@ -9544,6 +9726,23 @@ function selectCurrentTableCellContent(editor) {
   return true;
 }
 
+function selectCurrentTableCell(editor) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  const cellRange = getCurrentTableCellRange(state?.selection);
+  if (!view || !state || !cellRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, cellRange.cellPos))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
 function moveTableTextCursorToAdjacentCell(editor, direction) {
   const view = editor.prosemirrorView;
   const state = view?.state;
@@ -9587,6 +9786,64 @@ function moveTableTextCursorToAdjacentCell(editor, direction) {
   view.dispatch(
     state.tr
       .setSelection(TextSelection.near(state.doc.resolve(nextCellRange.to), -1))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
+function moveSelectedTableCell(editor, key) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  const selection = state?.selection;
+  const anchorCell = selection?.$anchorCell;
+  const headCell = selection?.$headCell;
+  if (
+    !view ||
+    !state ||
+    !anchorCell ||
+    !headCell ||
+    anchorCell.pos !== headCell.pos
+  ) {
+    return false;
+  }
+
+  const currentNode = view.nodeDOM(anchorCell.pos);
+  const currentCell = (currentNode instanceof Element ? currentNode : currentNode?.parentElement)
+    ?.closest("td, th");
+  const currentRow = currentCell?.parentElement;
+  const table = currentCell?.closest("table");
+  if (!currentCell || !currentRow || !table) {
+    return false;
+  }
+
+  const rows = [...table.rows];
+  const rowIndex = rows.indexOf(currentRow);
+  const cellIndex = [...currentRow.cells].indexOf(currentCell);
+  let targetCell = null;
+  if (key === "ArrowLeft") {
+    targetCell = currentRow.cells[cellIndex - 1] || null;
+  } else if (key === "ArrowRight") {
+    targetCell = currentRow.cells[cellIndex + 1] || null;
+  } else {
+    const targetRow = rows[rowIndex + (key === "ArrowUp" ? -1 : 1)];
+    targetCell = targetRow?.cells[Math.min(cellIndex, targetRow.cells.length - 1)] || null;
+  }
+  if (!targetCell) {
+    return false;
+  }
+
+  const targetPosition = view.posAtDOM(targetCell, 0);
+  const targetRange = getCurrentTableCellRange({
+    $from: state.doc.resolve(targetPosition),
+  });
+  if (!targetRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, targetRange.cellPos))
       .scrollIntoView(),
   );
   view.focus();

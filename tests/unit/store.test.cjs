@@ -453,6 +453,54 @@ test("migrates legacy default tab move shortcuts away from arrows", () => {
   );
 });
 
+test("migrates the legacy default layout mode shortcut away from Mod+Shift+M", () => {
+  const legacyDirectory = createTemporaryDirectory();
+  fs.mkdirSync(legacyDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(legacyDirectory, "notes.json"),
+    JSON.stringify({
+      version: 10,
+      editorPreferences: {
+        keyboardShortcuts: {
+          ...DEFAULT_KEYBOARD_SHORTCUTS,
+          toggleLayoutMode: "Mod+Shift+M",
+        },
+      },
+      notes: [],
+    }),
+    "utf8",
+  );
+
+  const legacyStore = new StickyStore(legacyDirectory);
+  assert.equal(
+    legacyStore.getEditorPreferences().keyboardShortcuts.toggleLayoutMode,
+    "Mod+Shift+T",
+  );
+
+  const currentDirectory = createTemporaryDirectory();
+  fs.mkdirSync(currentDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(currentDirectory, "notes.json"),
+    JSON.stringify({
+      version: 11,
+      editorPreferences: {
+        keyboardShortcuts: {
+          ...DEFAULT_KEYBOARD_SHORTCUTS,
+          toggleLayoutMode: "Mod+Shift+M",
+        },
+      },
+      notes: [],
+    }),
+    "utf8",
+  );
+
+  const currentStore = new StickyStore(currentDirectory);
+  assert.equal(
+    currentStore.getEditorPreferences().keyboardShortcuts.toggleLayoutMode,
+    "Mod+Shift+M",
+  );
+});
+
 test("migrates legacy always-on-top default to false", () => {
   const directory = createTemporaryDirectory();
   fs.mkdirSync(directory, { recursive: true });

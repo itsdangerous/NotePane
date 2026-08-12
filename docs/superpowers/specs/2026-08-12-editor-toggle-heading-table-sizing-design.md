@@ -89,3 +89,7 @@ Renderer tests will verify:
 - manual table resizing still works adjacent to auto-fit.
 
 After focused tests pass, run `npm run verify:quick`, then run the relevant Renderer test selection. Because the work touches a shared editor key handler and ProseMirror table sizing, run `npm run verify` once at the end.
+
+## Follow-up: Multiline Toggle Heading Alignment
+
+When Shift+Enter creates multiple visual lines in a toggle heading, keep the toggle arrow aligned with the top and first line instead of vertically centering it across the full heading height. Scope the override to toggleable heading wrappers; retain the existing single-line appearance and the established top alignment for ordinary toggle-list items. Validate the rendered arrow and heading rectangles at more than one heading level.

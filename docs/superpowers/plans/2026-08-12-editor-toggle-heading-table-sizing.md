@@ -289,3 +289,35 @@ git status --short
 ```
 
 Confirm the implementation preserves pre-existing unrelated changes in overlapping files and report any remaining dirty files separately.
+
+---
+
+### Task 5: Align multiline toggle-heading arrows to the first line
+
+**Files:**
+- Modify: `src/styles.css` next to the existing toggle-list wrapper alignment
+- Test: `tests/e2e/renderer.spec.mjs` next to the toggle-heading Shift+Enter regression
+
+**Interfaces:**
+- Consumes: BlockNote's `.bn-toggle-wrapper` and `.bn-toggle-button` DOM.
+- Produces: top-aligned toggle-heading controls independent of the heading's multiline height.
+
+- [ ] **Step 1: Add a failing rendered-alignment test**
+
+Create an H1 toggle heading, insert a Shift+Enter line break, and measure the toggle button, wrapper, and heading rectangles. Assert the button top remains within one pixel of the wrapper top and is above the heading's vertical midpoint.
+
+- [ ] **Step 2: Run the test and verify RED**
+
+```bash
+npx playwright test tests/e2e/renderer.spec.mjs --grep "top-aligns multiline toggle heading arrows"
+```
+
+Expected: FAIL because BlockNote's default `.bn-toggle-wrapper` uses `align-items: center`.
+
+- [ ] **Step 3: Apply the scoped CSS override**
+
+Extend the existing `align-items: flex-start` selector to include `.bn-block-content[data-content-type="heading"][data-is-toggleable="true"] .bn-toggle-wrapper`.
+
+- [ ] **Step 4: Run the focused test and build**
+
+Run the test from Step 2 and `npm run build`. Expected: both pass.

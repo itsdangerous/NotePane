@@ -38,7 +38,7 @@ Add tests for an existing paragraph and a heading 2:
 test("undoes toggle conversion without consuming its shortcut marker", async ({ page }) => {
   // Existing paragraph: Home, ">", Space, Cmd+Z -> paragraph text starts with ">".
   // Heading 2: ">", Space, Cmd+Z -> heading 2 text starts with ">".
-  // A second Cmd+Z -> paragraph text starts with "##".
+  // The next Cmd+Z removes ">"; only the following Cmd+Z undoes heading mode.
 });
 ```
 
@@ -88,10 +88,10 @@ Undo after each conversion and assert:
 
 ```text
 heading 3 toggle -> heading 2 toggle with "###" restored
-heading 2 toggle -> ordinary toggle with "##" restored
+next undo -> heading 2 toggle with "###" removed
 ```
 
-Redo both steps and assert heading 2 toggle then heading 3 toggle.
+Undo the heading 2 conversion separately and assert the ordinary toggle returns with `##` restored. Redo each marker and conversion step in order and assert the same nested states are replayed.
 
 - [ ] **Step 2: Run RED**
 

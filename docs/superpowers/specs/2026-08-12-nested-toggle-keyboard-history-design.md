@@ -60,6 +60,7 @@ paragraph
 -> type "##" then Space converts to heading 2
 -> type ">" then Space enables toggle
 -> Cmd+Z disables toggle and restores heading 2 with leading ">"
+-> Cmd+Z removes the restored ">" as the preceding text-input step
 -> Cmd+Z undoes the heading conversion and restores paragraph with "##" content
 ```
 
@@ -67,10 +68,11 @@ paragraph
 ordinary toggle
 -> type "##" at the title start then Space changes the base to heading 2
 -> Cmd+Z restores the ordinary toggle with leading "##" in its title
--> Cmd+Shift+Z restores the heading 2 toggle
+-> Cmd+Z removes the restored "##" as the preceding text-input step
+-> Cmd+Shift+Z restores "##", then another Cmd+Shift+Z restores the heading 2 toggle
 ```
 
-The first undo after a toggle conversion must never flatten a heading. Redo must replay the same layers in the forward order.
+The first undo after a toggle conversion must never flatten a heading. Restored shortcut text remains an ordinary history step; undo and redo must not skip over it while replaying format layers.
 
 Implementation will use explicit ProseMirror history boundaries around NotePane's conversion command rather than timing assumptions or delayed DOM edits. BlockNote remains responsible for rendering and document persistence.
 

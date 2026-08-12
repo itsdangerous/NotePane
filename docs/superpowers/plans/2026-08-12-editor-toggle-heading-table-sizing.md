@@ -304,7 +304,7 @@ Confirm the implementation preserves pre-existing unrelated changes in overlappi
 
 - [ ] **Step 1: Add a failing rendered-alignment test**
 
-Create an H1 toggle heading, insert a Shift+Enter line break, and measure the toggle button, wrapper, and heading rectangles. Assert the button top remains within one pixel of the wrapper top and is above the heading's vertical midpoint.
+Create an H1 toggle heading and an ordinary toggle-list item, insert Shift+Enter line breaks, and measure their toggle button, wrapper, and title rectangles. Assert each button top remains within one pixel of its wrapper top and is above the title's vertical midpoint. For the ordinary toggle, also verify the `Empty toggle. Click to add a block.` action is visible without changing the top alignment.
 
 - [ ] **Step 2: Run the test and verify RED**
 

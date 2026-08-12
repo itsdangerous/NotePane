@@ -92,4 +92,4 @@ After focused tests pass, run `npm run verify:quick`, then run the relevant Rend
 
 ## Follow-up: Multiline Toggle Heading Alignment
 
-When Shift+Enter creates multiple visual lines in a toggle heading, keep the toggle arrow aligned with the top and first line instead of vertically centering it across the full heading height. Scope the override to toggleable heading wrappers; retain the existing single-line appearance and the established top alignment for ordinary toggle-list items. Validate the rendered arrow and heading rectangles at more than one heading level.
+When Shift+Enter creates multiple visual lines in a toggle heading or an ordinary toggle-list item, keep the toggle arrow aligned with the top and first line instead of vertically centering it across the full title height. The same rule applies while an empty toggle displays its `Empty toggle. Click to add a block.` child action. Retain the existing single-line appearance. Validate the rendered arrow and title rectangles for heading toggles, ordinary populated toggles, and empty-child toggles.

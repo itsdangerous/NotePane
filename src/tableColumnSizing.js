@@ -5,6 +5,18 @@ import {
 } from "prosemirror-tables";
 
 const MIN_AUTO_FIT_COLUMN_WIDTH = 35;
+const MEASURED_TYPOGRAPHY_PROPERTIES = [
+  "fontFamily",
+  "fontSize",
+  "fontStyle",
+  "fontWeight",
+  "fontStretch",
+  "fontVariant",
+  "lineHeight",
+  "letterSpacing",
+  "textTransform",
+  "textIndent",
+];
 
 export function autoFitActiveTableColumn(editor, eventTarget) {
   const view = editor?.prosemirrorView;
@@ -24,7 +36,11 @@ export function autoFitActiveTableColumn(editor, eventTarget) {
   if (!column) {
     return false;
   }
-  const width = measureAutoFitColumnWidth(tableElement, column.index);
+  const width = measureAutoFitColumnWidth(
+    tableElement,
+    column.index,
+    getMaximumAutoFitColumnWidth(tableElement),
+  );
   if (!Number.isFinite(width)) {
     return false;
   }
@@ -76,7 +92,7 @@ function getTableColumnAtCellPosition(doc, cellPosition) {
   };
 }
 
-function measureAutoFitColumnWidth(table, columnIndex) {
+function measureAutoFitColumnWidth(table, columnIndex, maximumWidth) {
   const measurements = [];
   for (const row of table.rows) {
     let currentColumn = 0;
@@ -95,7 +111,7 @@ function measureAutoFitColumnWidth(table, columnIndex) {
   }
   return Math.max(
     MIN_AUTO_FIT_COLUMN_WIDTH,
-    Math.ceil(Math.max(...measurements)),
+    Math.min(maximumWidth, Math.ceil(Math.max(...measurements))),
   );
 }
 
@@ -115,7 +131,13 @@ function measureCellContentWidth(cell) {
     borderRightWidth: style.borderRightWidth,
     borderStyle: "solid",
     boxSizing: "border-box",
-    font: style.font,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontStyle: style.fontStyle,
+    fontWeight: style.fontWeight,
+    fontStretch: style.fontStretch,
+    fontVariant: style.fontVariant,
+    lineHeight: style.lineHeight,
     letterSpacing: style.letterSpacing,
     whiteSpace: "nowrap",
     visibility: "hidden",
@@ -123,6 +145,7 @@ function measureCellContentWidth(cell) {
   });
 
   const content = cell.cloneNode(true);
+  copyRenderedTypography(cell, content);
   content.querySelectorAll(".column-resize-handle").forEach((handle) => {
     handle.remove();
   });
@@ -131,6 +154,34 @@ function measureCellContentWidth(cell) {
   const width = measurement.getBoundingClientRect().width;
   measurement.remove();
   return width;
+}
+
+function copyRenderedTypography(sourceRoot, cloneRoot) {
+  const sourceElements = [sourceRoot, ...sourceRoot.querySelectorAll("*")];
+  const cloneElements = [cloneRoot, ...cloneRoot.querySelectorAll("*")];
+  sourceElements.forEach((source, index) => {
+    const clone = cloneElements[index];
+    if (!clone?.style) {
+      return;
+    }
+    const style = getComputedStyle(source);
+    for (const property of MEASURED_TYPOGRAPHY_PROPERTIES) {
+      clone.style[property] = style[property];
+    }
+  });
+}
+
+function getMaximumAutoFitColumnWidth(table) {
+  const editor = table.closest(".bn-editor");
+  const container = editor ?? table.parentElement ?? table;
+  const style = getComputedStyle(container);
+  const horizontalPadding =
+    Number.parseFloat(style.paddingLeft || "0") +
+    Number.parseFloat(style.paddingRight || "0");
+  return Math.max(
+    MIN_AUTO_FIT_COLUMN_WIDTH,
+    Math.floor(container.clientWidth - horizontalPadding),
+  );
 }
 
 function findTableElementAtPosition(view, tableStart) {

@@ -12,13 +12,24 @@ import { codeBlockOptions } from "@blocknote/code-block";
 import {
   BlockNoteSchema,
   createCodeBlockSpec,
+  createHeadingBlockSpec,
   createStyleSpecFromTipTapMark,
+  defaultBlockSpecs,
   defaultStyleSpecs,
 } from "@blocknote/core";
+import {
+  filterSuggestionItems,
+  insertOrUpdateBlockForSlashMenu,
+} from "@blocknote/core/extensions";
 import "@blocknote/core/fonts/inter.css";
 import { BlockNoteView } from "@blocknote/mantine";
 import "@blocknote/mantine/style.css";
-import { useCreateBlockNote } from "@blocknote/react";
+import {
+  getDefaultReactSlashMenuItems,
+  SuggestionMenuController,
+  useCreateBlockNote,
+} from "@blocknote/react";
+import { offset, shift, size } from "@floating-ui/react";
 import { TextSelection } from "@tiptap/pm/state";
 import { CellSelection, mergeCells, splitCell } from "prosemirror-tables";
 import {
@@ -29,6 +40,7 @@ import {
   Ellipsis,
   Eye,
   FileDown,
+  Heading4,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
@@ -54,6 +66,13 @@ import {
   autoFitActiveTableColumn,
   previewActiveTableColumnResize,
 } from "./tableColumnSizing.js";
+import {
+  handleToggleBackspace,
+  handleToggleEnter,
+  handleToggleSpace,
+} from "./toggleKeyboard.js";
+import notePaneWordmarkDarkUrl from "../assets/notepane-wordmark-dark.png";
+import notePaneWordmarkUrl from "../assets/notepane-wordmark.png";
 import "./styles.css";
 
 const NOTE_PANE_TEMPLATE_BLOCKS = [
@@ -204,7 +223,12 @@ const notionInlineCodeStyle = createStyleSpecFromTipTapMark(
   "boolean",
 );
 
-const schema = BlockNoteSchema.create().extend({
+const schema = BlockNoteSchema.create({
+  blockSpecs: {
+    ...defaultBlockSpecs,
+    heading: createHeadingBlockSpec({ levels: [1, 2, 3, 4] }),
+  },
+}).extend({
   blockSpecs: {
     codeBlock: createCodeBlockSpec(codeBlockOptions),
   },
@@ -476,6 +500,42 @@ const SIDEBAR_COMPACT_WIDTH = 64;
 const EXPORT_TOAST_TIMEOUT_MS = 2600;
 const TRASH_UNDO_TOAST_TIMEOUT_MS = 5200;
 const FONT_SIZE_TOAST_TIMEOUT_MS = 1400;
+const SLASH_MENU_MAX_HEIGHT = 400;
+
+function createSlashMenuFloatingUIOptions() {
+  return {
+    useFloatingOptions: {
+      placement: "bottom-start",
+      middleware: [
+        offset(10),
+        {
+          name: "notepaneSlashMenuPlacement",
+          fn({ placement, rects }) {
+            const spaceAbove = rects.reference.y;
+            const spaceBelow = window.innerHeight -
+              (rects.reference.y + rects.reference.height);
+            const nextPlacement = spaceAbove > spaceBelow
+              ? "top-start"
+              : "bottom-start";
+            return placement === nextPlacement
+              ? {}
+              : { reset: { placement: nextPlacement } };
+          },
+        },
+        shift({ padding: 10 }),
+        size({
+          apply({ elements, availableHeight }) {
+            elements.floating.style.maxHeight = `${Math.max(
+              0,
+              Math.min(availableHeight, SLASH_MENU_MAX_HEIGHT),
+            )}px`;
+          },
+          padding: 10,
+        }),
+      ],
+    },
+  };
+}
 const LAYOUT_TRANSITION_TIMEOUT_MS = 6500;
 
 function App() {
@@ -1186,9 +1246,11 @@ function StickyEditor({
       }
 
       const copiedPlainText = event.clipboardData.getData("text/plain");
+      const selectedPlainText = window.getSelection()?.toString() ?? "";
       const normalizedPlainText = normalizeCopiedEditorPlainText(
         editor,
         copiedPlainText,
+        selectedPlainText,
       );
       if (normalizedPlainText !== copiedPlainText) {
         event.clipboardData.setData("text/plain", normalizedPlainText);
@@ -2246,11 +2308,31 @@ function StickyEditor({
   useEffect(() => {
     const handleEditorKeyDownCapture = (event) => {
       if (
+        isEditorShortcutTarget(event.target) &&
+        handleToggleBackspace(editor, event)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditorActive(true);
+        return;
+      }
+
+      if (
+        isEditorShortcutTarget(event.target) &&
+        handleToggleEnter(editor, event)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsEditorActive(true);
+        return;
+      }
+
+      if (
         event.key === " " &&
         !(event.metaKey || event.ctrlKey || event.altKey) &&
         !isEditableFormTarget(event.target) &&
         isEditorShortcutTarget(event.target) &&
-        convertNotionToggleShortcut(editor)
+        handleToggleSpace(editor, event)
       ) {
         event.preventDefault();
         setIsEditorActive(true);
@@ -3848,7 +3930,9 @@ function StickyEditor({
             portalElements={{ default: document.body }}
             formattingToolbar={false}
             sideMenu={false}
+            slashMenu={false}
           >
+            <NotePaneSlashMenuController editor={editor} />
             <RecentColorFormattingToolbarController
               recentColors={recentEditorColors}
               onColorUsed={onEditorColorUsed}
@@ -6046,13 +6130,56 @@ function SessionTabContextMenu({
 function NotePaneWordmark() {
   return (
     <div className="brand-wordmark" aria-label="NotePane wordmark">
-      <span className="brand-wordmark-mark" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </span>
-      <span className="brand-wordmark-text">NotePane</span>
+      <img
+        className="brand-wordmark-image brand-wordmark-image-light"
+        src={notePaneWordmarkUrl}
+        alt=""
+        aria-hidden="true"
+      />
+      <img
+        className="brand-wordmark-image brand-wordmark-image-dark"
+        src={notePaneWordmarkDarkUrl}
+        alt=""
+        aria-hidden="true"
+      />
     </div>
+  );
+}
+
+function NotePaneSlashMenuController({ editor }) {
+  const floatingUIOptions = useMemo(createSlashMenuFloatingUIOptions, []);
+  const getItems = useCallback(async (query) => {
+    const toggleHeading4 = {
+      title: "Toggle Heading 4",
+      subtext: "Toggleable minor subsection heading",
+      aliases: ["h4", "heading4", "subheading4", "collapsible"],
+      group: "Subheadings",
+      icon: <Heading4 size={18} />,
+      key: "toggle_heading_4",
+      onItemClick: () => {
+        insertOrUpdateBlockForSlashMenu(editor, {
+          type: "heading",
+          props: { level: 4, isToggleable: true },
+        });
+      },
+    };
+    const items = getDefaultReactSlashMenuItems(editor);
+    const toggleHeading3Index = items.findIndex(
+      (item) => item.key === "toggle_heading_3",
+    );
+    items.splice(toggleHeading3Index + 1, 0, toggleHeading4);
+    return filterSuggestionItems(items, query);
+  }, [editor]);
+
+  return (
+    <SuggestionMenuController
+      triggerCharacter="/"
+      getItems={getItems}
+      shouldOpen={(state) =>
+        !state.selection.$from.parent.type.isInGroup("tableContent")
+      }
+      floatingUIOptions={floatingUIOptions}
+    />
   );
 }
 
@@ -6553,10 +6680,36 @@ function parseBlocksJSON(blocksJSON) {
 
   try {
     const parsed = JSON.parse(blocksJSON);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    return Array.isArray(parsed) && parsed.length > 0
+      ? normalizeSupportedHeadingLevels(parsed)
+      : null;
   } catch {
     return null;
   }
+}
+
+function normalizeSupportedHeadingLevels(blocks) {
+  return blocks.map((block) => {
+    const children = Array.isArray(block?.children)
+      ? normalizeSupportedHeadingLevels(block.children)
+      : block?.children;
+
+    if (block?.type !== "heading") {
+      return children === block?.children ? block : { ...block, children };
+    }
+
+    const level = clamp(
+      Math.round(Number(block.props?.level ?? block.props?.headingLevel ?? 1)),
+      1,
+      4,
+      1,
+    );
+    return {
+      ...block,
+      props: { ...block.props, level },
+      children,
+    };
+  });
 }
 
 function createTemplateSessionNote(sourceNote = {}, timestamp = Date.now()) {
@@ -9372,14 +9525,11 @@ function isStandaloneWebUrl(text) {
   return /^https?:\/\/\S+$/i.test(String(text).trim());
 }
 
-function normalizeCopiedEditorPlainText(editor, clipboardText) {
-  const normalizedMarkdown = String(clipboardText).replace(/\\\n/g, "\n");
-  if (normalizedMarkdown !== clipboardText) {
-    return normalizedMarkdown;
-  }
+function normalizeCopiedEditorPlainText(editor, clipboardText, selectedText = "") {
+  let normalizedPlainText = String(clipboardText).replace(/\\\n/g, "\n");
 
   try {
-    return editor.transact((transaction) => {
+    normalizedPlainText = editor.transact((transaction) => {
       let containsHardBreak = false;
       transaction.doc.nodesBetween(
         transaction.selection.from,
@@ -9392,7 +9542,7 @@ function normalizeCopiedEditorPlainText(editor, clipboardText) {
       );
 
       if (!containsHardBreak) {
-        return clipboardText;
+        return normalizedPlainText;
       }
 
       return transaction.doc.textBetween(
@@ -9403,8 +9553,17 @@ function normalizeCopiedEditorPlainText(editor, clipboardText) {
       );
     });
   } catch {
-    return normalizedMarkdown;
+    // Keep the clipboard serializer output when the editor selection is unavailable.
   }
+
+  if (
+    normalizedPlainText.endsWith("\n") &&
+    !String(selectedText).endsWith("\n")
+  ) {
+    return normalizedPlainText.slice(0, -1);
+  }
+
+  return normalizedPlainText;
 }
 
 function normalizePastedMarkdownForBlockNote(markdown) {
@@ -9633,37 +9792,6 @@ function escapeRegExp(value) {
 function hasVisibleTextSelection() {
   const selection = window.getSelection();
   return Boolean(selection && !selection.isCollapsed && selection.toString());
-}
-
-function convertNotionToggleShortcut(editor) {
-  try {
-    const { block } = editor.getTextCursorPosition();
-    if (editor.schema.blockSchema[block.type]?.content !== "inline") {
-      return false;
-    }
-
-    return editor.transact((transaction) => {
-      const { selection } = transaction;
-      const shouldConvert = (
-        selection.empty &&
-        selection.$from.parent === selection.$to.parent &&
-        selection.$from.parentOffset === 1 &&
-        selection.$from.parent.textContent.startsWith(">")
-      );
-      if (!shouldConvert) {
-        return false;
-      }
-
-      transaction.delete(selection.from - 1, selection.from);
-      editor.updateBlock(block, {
-        type: "toggleListItem",
-        props: {},
-      });
-      return true;
-    });
-  } catch {
-    return false;
-  }
 }
 
 function selectAllBlocks(editor) {
@@ -10106,7 +10234,7 @@ function getHeadingLevel(block) {
       1,
   );
 
-  return clamp(Math.round(level), 1, 6, 1);
+  return clamp(Math.round(level), 1, 4, 1);
 }
 
 function scrollEditorBlockIntoView(blockId) {

@@ -343,64 +343,32 @@ body.theme-dark,
 .brand-wordmark {
   display: flex;
   align-items: center;
-  gap: 8px;
   min-width: 0;
   height: 30px;
-  color: var(--sticky-text-color);
   -webkit-app-region: no-drag;
 }
 
-.brand-wordmark-mark {
-  position: relative;
+.brand-wordmark-image {
   display: block;
-  width: 24px;
-  height: 20px;
-  flex: 0 0 auto;
+  width: 116px;
+  height: auto;
+  max-height: 30px;
+  object-fit: contain;
+  object-position: left center;
 }
 
-.brand-wordmark-mark span {
-  position: absolute;
+.brand-wordmark-image-dark {
+  display: none;
+}
+
+body.theme-dark .brand-wordmark-image-light,
+.sticky-shell.theme-dark .brand-wordmark-image-light {
+  display: none;
+}
+
+body.theme-dark .brand-wordmark-image-dark,
+.sticky-shell.theme-dark .brand-wordmark-image-dark {
   display: block;
-  width: 17px;
-  height: 13px;
-  border: 1px solid color-mix(in srgb, var(--sticky-text-color) 18%, transparent);
-  border-radius: 5px;
-  box-shadow: 0 4px 10px rgb(0 0 0 / 0.12);
-}
-
-.brand-wordmark-mark span:nth-child(1) {
-  right: 0;
-  bottom: 0;
-  background: var(--brand-pastel-sky);
-}
-
-.brand-wordmark-mark span:nth-child(2) {
-  right: 3px;
-  bottom: 3px;
-  background: var(--brand-pastel-sage);
-}
-
-.brand-wordmark-mark span:nth-child(3) {
-  left: 0;
-  top: 0;
-  background: var(--brand-pane-cream);
-}
-
-.brand-wordmark-text {
-  overflow: hidden;
-  background:
-    linear-gradient(
-      92deg,
-      var(--sticky-text-color),
-      color-mix(in srgb, var(--brand-pastel-sky) 50%, var(--sticky-text-color))
-    );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font: 820 14px/1 var(--notepane-display-font);
-  letter-spacing: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .icon,
@@ -2998,7 +2966,7 @@ body.theme-dark,
 
 .editor-font-size-toast {
   position: sticky;
-  z-index: 20;
+  z-index: 26;
   top: 10px;
   width: fit-content;
   margin: 10px 12px -30px auto;
@@ -3439,6 +3407,31 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
   color: var(--sticky-text-color);
 }
 
+.bn-editor > .bn-block-group > .bn-block-outer + .bn-block-outer {
+  margin-top: 8px;
+}
+
+.bn-editor [data-content-type="heading"] {
+  line-height: 1.3;
+}
+
+.bn-editor [data-content-type="heading"][data-level="1"],
+.bn-editor [data-content-type="heading"]:has(h1) {
+  --level: 1.875em;
+}
+
+.bn-editor [data-content-type="heading"][data-level="2"] {
+  --level: 1.5em;
+}
+
+.bn-editor [data-content-type="heading"][data-level="3"] {
+  --level: 1.25em;
+}
+
+.bn-editor [data-content-type="heading"][data-level="4"] {
+  --level: 1em;
+}
+
 .bn-container,
 .bn-editor {
   background: transparent;
@@ -3480,6 +3473,9 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
 
 .bn-editor
   .bn-block-content[data-content-type="toggleListItem"]
+  .bn-toggle-wrapper,
+.bn-editor
+  .bn-block-content[data-content-type="heading"][data-is-toggleable="true"]
   .bn-toggle-wrapper {
   align-items: flex-start;
 }
@@ -4197,6 +4193,61 @@ div:has(> .bn-formatting-toolbar.notepane-formatting-toolbar.is-table-context) {
   overflow: auto !important;
   scrollbar-color: var(--sticky-scrollbar-thumb) var(--sticky-scrollbar-track);
 }
+
+.bn-suggestion-menu[role="listbox"] {
+  max-height: inherit;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.bn-block-content[data-content-type="heading"]:has(
+    .ProseMirror-trailingBreak:only-child
+  ) {
+  position: relative;
+}
+
+.bn-block-content[data-content-type="heading"]:has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  position: absolute;
+  top: 18px;
+  left: 0;
+  margin: 0;
+  font-style: normal;
+  line-height: normal;
+  white-space: nowrap;
+}
+
+.bn-block-content[data-content-type="heading"][data-is-toggleable="true"]:has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  left: 28px;
+}
+
+.bn-block-content[data-content-type="heading"]:has(h1):has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  content: "Heading 1" !important;
+}
+
+.bn-block-content[data-content-type="heading"]:has(h2):has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  content: "Heading 2" !important;
+}
+
+.bn-block-content[data-content-type="heading"]:has(h3):has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  content: "Heading 3" !important;
+}
+
+.bn-block-content[data-content-type="heading"]:has(h4):has(
+    .ProseMirror-trailingBreak:only-child
+  )::after {
+  content: "Heading 4" !important;
+}
+
 
 .image-tools {
   position: fixed;

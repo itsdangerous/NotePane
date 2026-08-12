@@ -19,8 +19,16 @@ The app uses a quiet pastel system:
 
 ## Logo assets
 
-- `assets/brand/notepane-app-icon.svg` — app icon vector source
-- `assets/icon.png` — app icon PNG source
-- `build/icon.png` — development/Dock icon source
-- `build/icon.icns` — macOS app bundle icon source
-- `assets/brand/notepane-wordmark.svg` — wordmark / font logo concept
+- `assets/notepane-icon.svg` — editable app icon vector source
+- `assets/notepane-icon.png` — canonical app icon raster source
+- `build/icon.png` — generated development/Windows icon
+- `build/icon.icns` — generated macOS app bundle icon
+- `assets/notepane-wordmark.svg` — wordmark / font logo concept
+- `assets/notepane-wordmark.png` — generated light-theme sidebar wordmark
+- `assets/notepane-wordmark-dark.png` — generated dark-theme sidebar wordmark
+
+Regenerate the packaged icon files after changing the source:
+
+```bash
+make icons
+```

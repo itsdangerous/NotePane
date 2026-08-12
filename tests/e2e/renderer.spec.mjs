@@ -18,6 +18,8 @@ test("starts with a blank first session", async ({ page }) => {
   await expect(page.locator("[aria-label='NotePane wordmark']")).toBeVisible();
   await expect(page.getByTestId("session-sidebar").locator("[aria-label='NotePane wordmark']"))
     .toBeVisible();
+  await expect(page.locator(".brand-wordmark-image-light")).toBeVisible();
+  await expect(page.locator(".brand-wordmark-image-dark")).toBeHidden();
   await expect(page.locator(".sticky-header [aria-label='NotePane wordmark']"))
     .toHaveCount(0);
   await expect(page.getByTestId("sticky-editor-surface")).toBeVisible();
@@ -198,6 +200,8 @@ test("keeps sticky chrome outside the editable BlockNote surface", async ({ page
 
 test("keeps light/dark mode global across sidebar sessions", async ({ page }) => {
   await clickLastEmptyParagraph(page);
+  await expect(page.locator(".brand-wordmark-image-light")).toBeVisible();
+  await expect(page.locator(".brand-wordmark-image-dark")).toBeHidden();
   const lightIconColors = await getActionIconColors(page);
   expectDistinctIconColors(lightIconColors);
   await expectSystemSymbolIcons(page);
@@ -205,6 +209,8 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
 
   await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "dark");
+  await expect(page.locator(".brand-wordmark-image-light")).toBeHidden();
+  await expect(page.locator(".brand-wordmark-image-dark")).toBeVisible();
   await clickLastEmptyParagraph(page);
   await expect.poll(async () => {
     const darkIconColors = await getActionIconColors(page);
@@ -252,6 +258,8 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
 
   await page.keyboard.press(modifierShortcut("Shift+L"));
   await expect(page.getByTestId("sticky-shell")).toHaveAttribute("data-theme-mode", "light");
+  await expect(page.locator(".brand-wordmark-image-light")).toBeVisible();
+  await expect(page.locator(".brand-wordmark-image-dark")).toBeHidden();
   await expect.poll(async () => {
     return await page.evaluate(() => ({
       bodyThemeMode: document.body.dataset.themeMode,
@@ -489,6 +497,18 @@ test("shows table of contents in tab mode only when enabled from preferences", a
   expect(tocMetrics.listOverflowX).toBe("hidden");
   expect(tocMetrics.listOverflowY).toBe("auto");
   expect(tocMetrics.listScrollWidth).toBeLessThanOrEqual(tocMetrics.listClientWidth);
+  await page.keyboard.press(modifierShortcut("+"));
+  const fontSizeToast = page.locator(".editor-font-size-toast");
+  await expect(fontSizeToast).toBeVisible();
+  const overlayLayers = await page.evaluate(() => ({
+    fontSizeToast: Number.parseInt(getComputedStyle(
+      document.querySelector(".editor-font-size-toast"),
+    ).zIndex, 10),
+    tableOfContents: Number.parseInt(getComputedStyle(
+      document.querySelector("[data-testid='editor-toc']"),
+    ).zIndex, 10),
+  }));
+  expect(overlayLayers.fontSizeToast).toBeGreaterThan(overlayLayers.tableOfContents);
   await expect(tableOfContents.getByRole("button", {
     name: /Jump to NotePane, heading level 1/,
   })).toBeVisible();
@@ -2307,7 +2327,7 @@ test("resizes and collapses the sidebar from its right edge", async ({ page }) =
   await expect(sidebar).toBeVisible();
   await expect(sidebar).toHaveAttribute("data-sidebar-state", "compact");
   await expect(sidebar.locator("[aria-label='NotePane wordmark']")).toBeHidden();
-  await expect(sidebar.locator(".brand-wordmark-text")).toBeHidden();
+  await expect(sidebar.locator(".brand-wordmark-image").first()).toBeHidden();
   await expect(sidebar.locator(".session-name").first()).toBeHidden();
   await expect(sidebar.locator(".session-shortcut").first()).toBeHidden();
   await expect(page.getByRole("button", { name: "Show sidebar" })).toBeVisible();
@@ -2894,6 +2914,17 @@ test("opens BlockNote slash menu with core demo commands", async ({ page }) => {
 
   const slashMenu = page.getByRole("listbox");
   await expect(slashMenu).toBeVisible();
+  const upperPlacement = await page.evaluate(() => {
+    const menu = document.querySelector(".bn-suggestion-menu[role='listbox']");
+    const activeBlock = document.querySelector(
+      ".bn-editor > .bn-block-group > .bn-block-outer",
+    );
+    return {
+      menuTop: Math.round(menu.getBoundingClientRect().top),
+      blockBottom: Math.round(activeBlock.getBoundingClientRect().bottom),
+    };
+  });
+  expect(upperPlacement.menuTop).toBeGreaterThanOrEqual(upperPlacement.blockBottom);
 
   for (const label of [
     "Heading 1",
@@ -2906,9 +2937,480 @@ test("opens BlockNote slash menu with core demo commands", async ({ page }) => {
     "Audio",
     "File",
     "Toggle Heading 1",
+    "Toggle Heading 4",
   ]) {
     await expect(slashMenu.getByText(label, { exact: true })).toBeVisible();
   }
+  for (const label of ["Heading 5", "Heading 6", "Toggle Heading 5", "Toggle Heading 6"]) {
+    await expect(slashMenu.getByText(label, { exact: true })).toHaveCount(0);
+  }
+
+  await slashMenu.getByText("Toggle Heading 4", { exact: true }).click();
+  const toggleHeading = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h4)",
+  ).last();
+  await expect(toggleHeading.locator(".bn-toggle-wrapper"))
+    .toHaveAttribute("data-show-children", "false");
+  await expect(toggleHeading.locator(
+    "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+  ).getByRole("button", {
+    name: "Empty toggle. Click to add a block.",
+  })).toHaveCount(0);
+});
+
+test("creates four toggle heading levels with Notion-style shortcuts", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+
+  for (const [headingShortcut, level, text] of [
+    ["#", 1, "Toggle heading one"],
+    ["##", 2, "Toggle heading two"],
+    ["###", 3, "Toggle heading three"],
+    ["####", 4, "Toggle heading four"],
+  ]) {
+    await page.keyboard.type(headingShortcut);
+    await page.keyboard.press("Space");
+    await expect(page.locator(`[data-content-type='heading'] h${level}`).last())
+      .toBeVisible();
+    await page.keyboard.type(">");
+    await page.keyboard.press("Space");
+    const emptyToggleHeading = page.locator(
+      `[data-content-type='heading'][data-is-toggleable='true']:has(h${level})`,
+    ).last();
+    await expect(emptyToggleHeading.locator(".bn-toggle-wrapper"))
+      .toHaveAttribute("data-show-children", "false");
+    await expect(emptyToggleHeading.locator(
+      "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+    ).getByRole("button", {
+      name: "Empty toggle. Click to add a block.",
+    })).toHaveCount(0);
+    await expect.poll(() => emptyToggleHeading.evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return {
+        content: style.content,
+        position: style.position,
+        fontStyle: style.fontStyle,
+      };
+    })).toEqual({
+      content: `"Heading ${level}"`,
+      position: "absolute",
+      fontStyle: "normal",
+    });
+    await page.keyboard.type(text);
+    await page.keyboard.press("Enter");
+
+    const heading = page.getByRole("heading", { name: text, level });
+    await expect(heading).toBeVisible();
+    await expect(heading.locator("xpath=ancestor::*[@data-content-type='heading'][1]"))
+      .toHaveAttribute("data-is-toggleable", "true");
+  }
+
+  const headingFontSizes = await Promise.all([
+    "Toggle heading one",
+    "Toggle heading two",
+    "Toggle heading three",
+    "Toggle heading four",
+  ].map((name) => page.getByRole("heading", { name }).evaluate(
+    (heading) => Number.parseFloat(getComputedStyle(heading).fontSize),
+  )));
+  expect(headingFontSizes).toEqual([30, 24, 20, 16]);
+});
+
+test("creates and focuses the first child when Enter ends a toggle heading", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("#");
+  await page.keyboard.press("Space");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("Toggle parent");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("First child");
+
+  const toggleOuter = page.getByRole("heading", {
+    name: "Toggle parent",
+    level: 1,
+  }).locator("xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]");
+  const child = page.getByText("First child", { exact: true });
+  await expect(child).toBeVisible();
+  await expect(toggleOuter.evaluate((outer, childElement) => (
+    outer.contains(childElement)
+  ), await child.elementHandle())).resolves.toBe(true);
+  await expect(page.locator(
+    ".bn-editor > .bn-block-group > .bn-block-outer > .bn-block-content",
+  ).filter({ hasText: /^First child$/ })).toHaveCount(0);
+
+  await page.getByRole("heading", { name: "Toggle parent", level: 1 })
+    .evaluate((heading) => {
+      heading.closest(".ProseMirror").focus();
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("New first child");
+  const newFirstChild = page.getByText("New first child", { exact: true });
+  await expect(newFirstChild).toBeVisible();
+  await expect(toggleOuter.evaluate((outer, elements) => {
+    const [newChildElement, retainedChildElement] = elements;
+    return outer.contains(newChildElement) &&
+      outer.contains(retainedChildElement) &&
+      Boolean(newChildElement.compareDocumentPosition(retainedChildElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING);
+  }, [await newFirstChild.elementHandle(), await child.elementHandle()]))
+    .resolves.toBe(true);
+});
+
+test("uses identical Enter behavior for ordinary and heading toggles", async ({ page }) => {
+  for (const { shortcut, title, selector } of [
+    {
+      shortcut: ">",
+      title: "Ordinary parent",
+      selector: "[data-content-type='toggleListItem']",
+    },
+    {
+      shortcut: "# >",
+      title: "Heading parent",
+      selector: "[data-content-type='heading'][data-is-toggleable='true']",
+    },
+  ]) {
+    await clickLastEmptyParagraph(page);
+    for (const token of shortcut.split(" ")) {
+      await page.keyboard.type(token);
+      await page.keyboard.press("Space");
+    }
+    await page.keyboard.type(title);
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(`${title} child`);
+
+    const toggle = page.locator(selector).filter({ hasText: title }).last();
+    const child = page.getByText(`${title} child`, { exact: true });
+    await expect(child).toBeVisible();
+    await expect(toggle.evaluate((element, childElement) => (
+      element.closest(".bn-block-outer").contains(childElement)
+    ), await child.elementHandle())).resolves.toBe(true);
+
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+  }
+});
+
+test("removes empty ordinary and heading toggles without losing heading format", async ({ page }) => {
+  for (const { shortcut, selector, typedText, resultSelector } of [
+    {
+      shortcut: ">",
+      selector: "[data-content-type='toggleListItem']",
+      typedText: "After ordinary toggle",
+      resultSelector: "[data-content-type='paragraph']",
+    },
+    {
+      shortcut: "# >",
+      selector: "[data-content-type='heading'][data-is-toggleable='true']",
+      typedText: "After heading toggle",
+      resultSelector: "[data-content-type='heading']:has(h1):not([data-is-toggleable='true'])",
+    },
+  ]) {
+    await clickLastEmptyParagraph(page);
+    for (const token of shortcut.split(" ")) {
+      await page.keyboard.type(token);
+      await page.keyboard.press("Space");
+    }
+    const toggleBlocks = page.locator(selector);
+    const toggleCount = await toggleBlocks.count();
+    await expect(toggleBlocks.last()).toBeVisible();
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(typedText);
+
+    await expect(toggleBlocks).toHaveCount(toggleCount - 1);
+    await expect(page.locator(selector).filter({ hasText: typedText }))
+      .toHaveCount(0);
+    await expect(page.locator(resultSelector).filter({ hasText: typedText }))
+      .toBeVisible();
+    await page.keyboard.press("Enter");
+  }
+});
+
+test("backs out of an empty heading toggle one format at a time", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("#");
+  await page.keyboard.press("Space");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const headingToggle = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h1)",
+  );
+  await expect(headingToggle).toBeVisible();
+
+  await page.keyboard.press("Backspace");
+
+  const heading = page.locator(
+    "[data-content-type='heading']:has(h1):not([data-is-toggleable='true'])",
+  );
+  await expect(headingToggle).toHaveCount(0);
+  await expect(heading).toBeVisible();
+
+  await page.keyboard.press("Backspace");
+
+  await expect(heading).toHaveCount(0);
+  const paragraph = page.locator("[data-content-type='paragraph']").last();
+  await expect(paragraph).toBeVisible();
+
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const ordinaryToggle = page.locator("[data-content-type='toggleListItem']").last();
+  await expect(ordinaryToggle).toBeVisible();
+  await expect(ordinaryToggle.locator(".bn-toggle-wrapper"))
+    .toHaveAttribute("data-show-children", "false");
+  await expect(ordinaryToggle.locator(
+    "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+  ).getByRole("button", {
+    name: "Empty toggle. Click to add a block.",
+  })).toHaveCount(0);
+
+  await page.keyboard.press("Backspace");
+  await expect(ordinaryToggle).toHaveCount(0);
+  await expect(page.locator("[data-content-type='paragraph']").last()).toBeVisible();
+});
+
+test("preserves toggle children when an empty title removes its toggle format", async ({ page }) => {
+  for (const { shortcut, title, selector, resultSelector } of [
+    {
+      shortcut: ">",
+      title: "Ordinary with child",
+      selector: "[data-content-type='toggleListItem']",
+      resultSelector: "[data-content-type='paragraph']",
+    },
+    {
+      shortcut: "# >",
+      title: "Heading with child",
+      selector: "[data-content-type='heading'][data-is-toggleable='true']",
+      resultSelector: "[data-content-type='heading']:has(h1):not([data-is-toggleable='true'])",
+    },
+  ]) {
+    await createBlankSession(page);
+    await clickLastEmptyParagraph(page);
+    for (const token of shortcut.split(" ")) {
+      await page.keyboard.type(token);
+      await page.keyboard.press("Space");
+    }
+    await page.keyboard.type(title);
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(`${title} retained child`);
+
+    const toggle = page.locator(selector).filter({ hasText: title }).last();
+    const titleElement = toggle.locator(":scope .bn-inline-content").first();
+    await titleElement.evaluate((element) => {
+      element.closest(".ProseMirror").focus();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(`${title} title`);
+
+    await expect(page.locator(selector).filter({ hasText: title })).toHaveCount(0);
+    const resultBlock = page.locator(resultSelector).filter({
+      hasText: `${title} title`,
+    });
+    await expect(resultBlock).toBeVisible();
+    const resultOuter = resultBlock.locator(
+      "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+    );
+    await expect(resultOuter.getByText(`${title} retained child`, { exact: true }))
+      .toBeVisible();
+  }
+});
+
+test("keeps regular heading Enter and toggle heading Shift+Enter behavior", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("# Regular heading");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Regular sibling");
+  const regularHeadingOuter = page.getByRole("heading", {
+    name: "Regular heading",
+    level: 1,
+  }).locator("xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]");
+  const regularSibling = page.getByText("Regular sibling", { exact: true });
+  await expect(regularSibling).toBeVisible();
+  await expect(regularHeadingOuter.evaluate((outer, siblingElement) => (
+    outer.contains(siblingElement)
+  ), await regularSibling.elementHandle())).resolves.toBe(false);
+
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("#");
+  await page.keyboard.press("Space");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("Toggle line");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("break");
+  await expect(page.getByRole("heading", { name: /Toggle line\s*break/, level: 1 }))
+    .toBeVisible();
+});
+
+test("top-aligns multiline toggle heading arrows", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("#");
+  await page.keyboard.press("Space");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("First line");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("Second line");
+
+  const toggleHeading = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h1)",
+  ).last();
+  await expect(toggleHeading).toBeVisible();
+  const alignment = await toggleHeading.evaluate((content) => {
+    const wrapper = content.querySelector(".bn-toggle-wrapper");
+    const button = content.querySelector(".bn-toggle-button");
+    const heading = content.querySelector("h1");
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const headingRect = heading.getBoundingClientRect();
+    return {
+      buttonTopOffset: Math.round(buttonRect.top - wrapperRect.top),
+      buttonCenter: buttonRect.top + buttonRect.height / 2,
+      headingCenter: headingRect.top + headingRect.height / 2,
+    };
+  });
+  expect(alignment.buttonTopOffset).toBeLessThanOrEqual(1);
+  expect(alignment.buttonCenter).toBeLessThan(alignment.headingCenter);
+});
+
+test("top-aligns multiline ordinary toggle arrows with the empty child action", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("First line");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("Second line");
+
+  const toggle = page.locator("[data-content-type='toggleListItem']").last();
+  await expect(toggle).toBeVisible();
+  const outer = toggle.locator(
+    "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+  );
+  await toggle.locator(".bn-toggle-button").click();
+  await expect(outer.getByRole("button", {
+    name: "Empty toggle. Click to add a block.",
+  })).toBeVisible();
+
+  const alignment = await toggle.evaluate((content) => {
+    const wrapper = content.querySelector(".bn-toggle-wrapper");
+    const button = content.querySelector(".bn-toggle-button");
+    const title = content.querySelector(".bn-inline-content");
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const titleRect = title.getBoundingClientRect();
+    return {
+      buttonTopOffset: Math.round(buttonRect.top - wrapperRect.top),
+      buttonCenter: buttonRect.top + buttonRect.height / 2,
+      titleCenter: titleRect.top + titleRect.height / 2,
+    };
+  });
+  expect(alignment.buttonTopOffset).toBeLessThanOrEqual(1);
+  expect(alignment.buttonCenter).toBeLessThan(alignment.titleCenter);
+});
+
+test("shows level-specific placeholders for empty headings", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+
+  for (const [shortcut, level] of [
+    ["#", 1],
+    ["##", 2],
+    ["###", 3],
+    ["####", 4],
+  ]) {
+    await page.keyboard.type(shortcut);
+    await page.keyboard.press("Space");
+    const heading = page.locator(`[data-content-type='heading']:has(h${level})`).last();
+    await expect(heading).toBeVisible();
+    await expect.poll(() => heading.evaluate((element) =>
+      getComputedStyle(element, "::after").content
+    )).toBe(`"Heading ${level}"`);
+    await page.keyboard.type(`Level ${level}`);
+    await page.keyboard.press("Enter");
+  }
+});
+
+test("uses a roomier top-level block rhythm", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("First block");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Second block");
+
+  const secondBlockMarginTop = await page.locator(
+    ".bn-editor > .bn-block-group > .bn-block-outer",
+  ).nth(1).evaluate((block) => Number.parseFloat(getComputedStyle(block).marginTop));
+  expect(secondBlockMarginTop).toBeGreaterThanOrEqual(8);
+});
+
+test("opens the slash menu upward from the lower half", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.type(`Block ${index}`);
+    await page.keyboard.press("Enter");
+  }
+
+  const blocks = page.locator(".bn-editor > .bn-block-group > .bn-block-outer");
+  const targetBlock = blocks.nth(20);
+  await targetBlock.evaluate((block) => {
+    block.scrollIntoView({ block: "end" });
+  });
+  await targetBlock.locator(".bn-inline-content").click();
+  await page.keyboard.press("End");
+  await expect.poll(() => page.evaluate(() => {
+    const editorSurface = document.querySelector(
+      "[data-testid='sticky-editor-surface']",
+    );
+    const target = [...document.querySelectorAll(
+      ".bn-editor > .bn-block-group > .bn-block-outer",
+    )][20];
+    const surfaceRect = editorSurface.getBoundingClientRect();
+    return target.getBoundingClientRect().top >=
+      surfaceRect.top + surfaceRect.height / 2;
+  })).toBe(true);
+  await page.keyboard.type("/");
+
+  const slashMenu = page.getByRole("listbox");
+  await expect(slashMenu).toBeVisible();
+  const slashMenuStyle = await slashMenu.evaluate((menu) => {
+    const style = getComputedStyle(menu);
+    return {
+      backgroundColor: style.backgroundColor,
+      paddingTop: Number.parseFloat(style.paddingTop),
+    };
+  });
+  expect(slashMenuStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(slashMenuStyle.paddingTop).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => {
+    const menu = document.querySelector(".bn-suggestion-menu[role='listbox']");
+    const target = [...document.querySelectorAll(
+      ".bn-editor > .bn-block-group > .bn-block-outer",
+    )][20];
+    const menuRect = menu.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    return menuRect.top + menuRect.height / 2 <
+      targetRect.top + targetRect.height / 2;
+  })).toBe(true);
+  await expect.poll(() => slashMenu.evaluate((menu) =>
+    menu.getBoundingClientRect().height
+  )).toBeLessThanOrEqual(400);
+  await slashMenu.hover();
+  await page.mouse.wheel(0, 10_000);
+  await expect.poll(() => slashMenu.evaluate((menu) =>
+    Math.round(menu.scrollTop + menu.clientHeight) >=
+      Math.round(menu.scrollHeight) - 1
+  )).toBe(true);
+  await expect(slashMenu.getByRole("option").last()).toBeInViewport();
 });
 
 test("creates a Notion-style toggle with greater-than and Space", async ({ page }) => {
@@ -2974,7 +3476,125 @@ test("converts greater-than at the start of an existing line into a toggle", asy
   ).toHaveCount(0);
 });
 
-test("converts headings and checkboxes with a leading greater-than into toggles", async ({ page }) => {
+test("undoes toggle conversion without consuming its shortcut marker", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("Existing undo line");
+  await page.keyboard.press("Home");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const ordinaryToggle = page.locator("[data-content-type='toggleListItem']")
+    .filter({ hasText: "Existing undo line" });
+  await expect(ordinaryToggle).toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("Z"));
+
+  const restoredParagraph = page.locator("[data-content-type='paragraph']")
+    .filter({ hasText: "> Existing undo line" });
+  await expect(ordinaryToggle).toHaveCount(0);
+  await expect(restoredParagraph.locator(".bn-inline-content"))
+    .toHaveText("> Existing undo line");
+
+  await page.keyboard.press(modifierShortcut("Shift+Z"));
+  await expect(ordinaryToggle).toBeVisible();
+
+  await createBlankSession(page);
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("##");
+  await page.keyboard.press("Space");
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+
+  const headingToggle = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h2)",
+  ).last();
+  await expect(headingToggle).toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("Z"));
+
+  const restoredHeading = page.locator(
+    "[data-content-type='heading']:has(h2):not([data-is-toggleable='true'])",
+  ).last();
+  await expect(headingToggle).toHaveCount(0);
+  await expect(restoredHeading.locator(".bn-inline-content")).toHaveText("> ");
+
+  await page.keyboard.press(modifierShortcut("Shift+Z"));
+  await expect(headingToggle).toBeVisible();
+});
+
+test("changes heading levels inside toggle mode as nested format layers", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type(">");
+  await page.keyboard.press("Space");
+  await page.keyboard.type("Nested parent");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Retained nested child");
+
+  const focusTitleStart = async (selector) => {
+    await page.locator(selector).last().locator(".bn-inline-content")
+      .evaluate((element) => {
+        element.closest(".ProseMirror").focus();
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+  };
+
+  await focusTitleStart("[data-content-type='toggleListItem']");
+  await page.keyboard.type("##");
+  await page.keyboard.press("Space");
+
+  const headingTwoToggle = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h2)",
+  ).last();
+  await expect(headingTwoToggle.locator(".bn-inline-content"))
+    .toHaveText("Nested parent");
+  const headingTwoOuter = headingTwoToggle.locator(
+    "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+  );
+  await expect(headingTwoOuter.getByText("Retained nested child", { exact: true }))
+    .toBeVisible();
+  await expect(headingTwoToggle.locator(".bn-toggle-wrapper"))
+    .toHaveAttribute("data-show-children", "true");
+
+  await page.keyboard.press(modifierShortcut("Z"));
+  const restoredOrdinaryToggle = page.locator("[data-content-type='toggleListItem']")
+    .filter({ hasText: "## Nested parent" });
+  await expect(restoredOrdinaryToggle.locator(".bn-inline-content"))
+    .toHaveText("## Nested parent");
+  await expect(restoredOrdinaryToggle.locator(
+    "xpath=ancestor::*[contains(@class, 'bn-block-outer')][1]",
+  ).getByText("Retained nested child", { exact: true })).toBeVisible();
+
+  await page.keyboard.press(modifierShortcut("Shift+Z"));
+  await expect(headingTwoToggle.locator(".bn-inline-content"))
+    .toHaveText("Nested parent");
+
+  await focusTitleStart(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h2)",
+  );
+  await page.keyboard.type("###");
+  await page.keyboard.press("Space");
+
+  const headingThreeToggle = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h3)",
+  ).last();
+  await expect(headingThreeToggle.locator(".bn-inline-content"))
+    .toHaveText("Nested parent");
+
+  await page.keyboard.press(modifierShortcut("Z"));
+  await expect(headingTwoToggle.locator(".bn-inline-content"))
+    .toHaveText("### Nested parent");
+
+  await page.keyboard.press(modifierShortcut("Shift+Z"));
+  await expect(headingThreeToggle.locator(".bn-inline-content"))
+    .toHaveText("Nested parent");
+});
+
+test("adds toggle mode without flattening heading base format", async ({ page }) => {
   await clickLastEmptyParagraph(page);
   await pastePlainText(page, "# Existing heading\n- [ ] Existing checkbox");
 
@@ -2993,15 +3613,22 @@ test("converts headings and checkboxes with a leading greater-than into toggles"
   await page.keyboard.type(">");
   await page.keyboard.press("Space");
 
-  for (const text of ["Existing heading", "Existing checkbox"]) {
-    const toggle = page
-      .locator("[data-content-type='toggleListItem']")
-      .filter({ hasText: text });
-    await expect(toggle).toBeVisible();
-    await expect(toggle.locator(".bn-inline-content")).toHaveText(text);
-  }
-  await expect(page.getByRole("heading", { name: "Existing heading" }))
-    .toHaveCount(0);
+  const headingToggle = page.locator(
+    "[data-content-type='heading'][data-is-toggleable='true']:has(h1)",
+  ).filter({ hasText: "Existing heading" });
+  await expect(headingToggle).toBeVisible();
+  await expect(headingToggle.locator(".bn-inline-content"))
+    .toHaveText("Existing heading");
+  await expect(page.getByRole("heading", {
+    name: "Existing heading",
+    level: 1,
+  })).toBeVisible();
+
+  const checkboxToggle = page.locator("[data-content-type='toggleListItem']")
+    .filter({ hasText: "Existing checkbox" });
+  await expect(checkboxToggle).toBeVisible();
+  await expect(checkboxToggle.locator(".bn-inline-content"))
+    .toHaveText("Existing checkbox");
   await expect(page.getByRole("checkbox")).toHaveCount(0);
 });
 
@@ -3170,8 +3797,31 @@ test("copies Shift+Enter line breaks without markdown escape characters", async 
     return clipboardData.getData("text/plain");
   });
 
-  expect(copiedPlainText).toContain("first copied line\nsecond copied line");
+  expect(copiedPlainText).toBe("first copied line\nsecond copied line");
   expect(copiedPlainText).not.toContain("first copied line\\\nsecond copied line");
+});
+
+test("copies editor blocks without a structural trailing newline", async ({ page }) => {
+  await clickLastEmptyParagraph(page);
+  await page.keyboard.type("first copied block");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("second copied block");
+  await page.keyboard.press(modifierShortcut("A"));
+
+  const copiedPlainText = await page.evaluate(() => {
+    const editor = document.querySelector(".bn-editor");
+    const clipboardData = new DataTransfer();
+    editor.dispatchEvent(
+      new ClipboardEvent("copy", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+    return clipboardData.getData("text/plain");
+  });
+
+  expect(copiedPlainText).toBe("first copied block\n\nsecond copied block");
 });
 
 test("pastes markdown headings from a rich clipboard as native headings", async ({ page }) => {
@@ -3454,11 +4104,15 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
   });
   expect(iconLabelGap).toBeGreaterThanOrEqual(8);
 
+  await expect(blockTypeMenu.getByRole("menuitem", {
+    name: "Heading 5",
+    exact: true,
+  })).toHaveCount(0);
   await blockTypeMenu.getByRole("menuitem", {
-    name: "Heading 6",
+    name: "Heading 4",
     exact: true,
   }).click();
-  await expect(blockTypeButton).toHaveText(/Heading 6/);
+  await expect(blockTypeButton).toHaveText(/Heading 4/);
   const selectedTypeGap = await blockTypeButton.evaluate((button) => {
     const icon = button.querySelector(
       ".mantine-Button-section[data-position='left']",
@@ -4049,6 +4703,50 @@ test("resizes selected table cells live and auto-fits columns on double click", 
   await expect.poll(async () => (await cell.boundingBox()).width)
     .toBeLessThan(widenedWidth - 40);
   expect((await cell.boundingBox()).width).toBeLessThan(90);
+});
+
+test("auto-fits table columns from the current font size within the editor width", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const tableCells = page.locator(".bn-editor table td");
+  const tabsCellIndex = await tableCells.evaluateAll((cells) => (
+    cells.findIndex((cellElement) => cellElement.textContent.trim() === "Tabs")
+  ));
+  const cell = tableCells.nth(tabsCellIndex);
+  await expect(cell).toContainText("Tabs");
+
+  const autoFitColumn = async () => {
+    const box = await cell.boundingBox();
+    await page.mouse.dblclick(
+      box.x + box.width - 1,
+      box.y + box.height / 2,
+    );
+  };
+
+  await cell.click();
+  await autoFitColumn();
+  const defaultFontWidth = (await cell.boundingBox()).width;
+
+  for (let index = 0; index < 5; index += 1) {
+    await page.keyboard.press(modifierShortcut("+"));
+  }
+  await expect.poll(() => page.locator(".bn-editor").evaluate((editor) => (
+    Number.parseFloat(getComputedStyle(editor).fontSize)
+  ))).toBeGreaterThan(20);
+  await autoFitColumn();
+  await expect.poll(async () => (await cell.boundingBox()).width)
+    .toBeGreaterThan(defaultFontWidth + 8);
+
+  await cell.click();
+  await page.keyboard.press(modifierShortcut("A"));
+  await page.keyboard.type("unbroken-value-".repeat(80));
+  await autoFitColumn();
+
+  const bounds = await page.evaluate(() => ({
+    columnWidth: document.querySelector(".bn-editor td").getBoundingClientRect().width,
+    editorWidth: document.querySelector(".bn-editor").clientWidth,
+  }));
+  expect(bounds.columnWidth).toBeLessThanOrEqual(bounds.editorWidth + 1);
 });
 
 test("deletes the current block with Command+X when no text is selected", async ({ page }) => {

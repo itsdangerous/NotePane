@@ -4,6 +4,7 @@ import { TableHandlesExtension } from "@blocknote/core/extensions";
 import { Combine, SplitSquareHorizontal } from "lucide-react";
 import {
   BasicTextStyleButton,
+  blockTypeSelectItems as getBlockTypeSelectItems,
   BlockTypeSelect,
   CreateLinkButton,
   FormattingToolbarController,
@@ -127,7 +128,12 @@ function RecentColorFormattingToolbar({
       return false;
     },
   });
-  const contextualItems = getFormattingToolbarItems(blockTypeSelectItems).filter(
+  const supportedBlockTypeSelectItems = (
+    blockTypeSelectItems ?? getBlockTypeSelectItems(editor.dictionary)
+  ).filter(
+    (item) => item.type !== "heading" || Number(item.props?.level ?? 1) <= 4,
+  );
+  const contextualItems = getFormattingToolbarItems(supportedBlockTypeSelectItems).filter(
     (item) => CONTEXTUAL_FORMATTING_TOOL_KEYS.has(item.key),
   );
 
@@ -144,7 +150,7 @@ function RecentColorFormattingToolbar({
     >
       {!isInsideTableCell && (
         <div className="notepane-formatting-type-row">
-          <BlockTypeSelect items={blockTypeSelectItems} />
+          <BlockTypeSelect items={supportedBlockTypeSelectItems} />
         </div>
       )}
       <div

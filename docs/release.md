@@ -11,6 +11,12 @@ When run from WSL, this creates `release/win-unpacked/` and launches the Windows
 
 ## App Packages
 
+Regenerate packaged icons after updating `assets/notepane-icon.png`:
+
+```bash
+make icons
+```
+
 ```bash
 npm run app
 ```

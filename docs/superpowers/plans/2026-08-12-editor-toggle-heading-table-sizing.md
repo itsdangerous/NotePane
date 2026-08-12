@@ -338,7 +338,7 @@ Run the test from Step 2 and `npm run build`. Expected: both pass.
 
 - [ ] **Step 1: Add failing matrix tests**
 
-For ordinary and heading toggles, verify a non-empty title Enter creates the first child. Separately verify an empty title Enter produces a paragraph, removes the toggle UI, focuses the paragraph, and retains any existing children.
+For ordinary and heading toggles, verify a non-empty title Enter creates the first child. Separately verify an empty ordinary toggle becomes a paragraph, while an empty heading toggle becomes a non-toggle heading at the same level. Both paths remove toggle UI, focus the resulting title block, and retain any existing children.
 
 - [ ] **Step 2: Verify RED**
 
@@ -348,7 +348,7 @@ npx playwright test tests/e2e/renderer.spec.mjs --grep "uses identical Enter beh
 
 - [ ] **Step 3: Replace the heading-only helper**
 
-Create `handleToggleEnter` with one `isToggleBlock` predicate covering `toggleListItem` and `heading` with `isToggleable: true`. Empty inline content calls `editor.updateBlock(block, { type: "paragraph", props: {} })`; non-empty content at the title end uses the existing first-child insertion path.
+Create `handleToggleEnter` with one `isToggleBlock` predicate covering `toggleListItem` and `heading` with `isToggleable: true`. Empty inline content updates an ordinary toggle to `paragraph`, or updates a heading toggle to the same `heading` level with `isToggleable: false`; non-empty content at the title end uses the existing first-child insertion path.
 
 - [ ] **Step 4: Verify focused behavior and build**
 

@@ -99,6 +99,7 @@ When Shift+Enter creates multiple visual lines in a toggle heading or an ordinar
 Treat an ordinary toggle-list item and a toggle heading as the same behavioral unit. Their only semantic difference in NotePane is the title block's presentation: ordinary inline text versus heading level 1 through 4. Route Enter for both types through one type-neutral keyboard helper before BlockNote's type-specific shortcuts.
 
 - A non-empty title at its end creates and focuses a new first child paragraph.
-- An empty title converts the toggle block in place to an empty paragraph and focuses it.
-- Converting an empty toggle must preserve any existing child blocks.
+- An empty ordinary toggle title converts the block in place to an empty paragraph and focuses it.
+- An empty heading toggle title removes only `isToggleable`, preserving the same heading level and focusing the empty heading. A subsequent Backspace may then use the heading's normal behavior to return to a paragraph.
+- Removing either kind of empty toggle must preserve any existing child blocks.
 - Shift+Enter, modified Enter, a non-empty text selection, and Enter away from the title end retain their existing behavior.

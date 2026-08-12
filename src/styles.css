@@ -58,12 +58,12 @@ body.theme-light,
   --brand-pastel-sage: #ddefd4;
   --brand-pastel-sky: #d9ecf8;
   --brand-graphite-ink: #2f3437;
-  --sticky-effective-bg: #ffffff;
-  --sticky-shell-bg: #ffffff;
-  --sticky-header-bg: #f7f7f5;
-  --sticky-sidebar-bg: #fbfbfa;
-  --sticky-editor-bg: #ffffff;
-  --sticky-panel-bg: #ffffff;
+  --sticky-effective-bg: #f5f5f2;
+  --sticky-shell-bg: #f5f5f2;
+  --sticky-header-bg: #f0f0ed;
+  --sticky-sidebar-bg: #f2f2ef;
+  --sticky-editor-bg: #f5f5f2;
+  --sticky-panel-bg: #f5f5f2;
   --sticky-panel-text: #37352f;
   --sticky-panel-muted: #787774;
   --sticky-text-color: #37352f;

@@ -273,7 +273,7 @@ test("keeps light/dark mode global across sidebar sessions", async ({ page }) =>
   }).toMatchObject({
     bodyThemeMode: "light",
     bodyHasLightClass: true,
-    bodyPanelBackground: "#ffffff",
+    bodyPanelBackground: "#f5f5f2",
     blockNoteColorSchemes: expect.arrayContaining(["light"]),
   });
 });

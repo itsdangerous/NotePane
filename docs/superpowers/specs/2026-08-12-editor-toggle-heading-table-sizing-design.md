@@ -93,3 +93,12 @@ After focused tests pass, run `npm run verify:quick`, then run the relevant Rend
 ## Follow-up: Multiline Toggle Heading Alignment
 
 When Shift+Enter creates multiple visual lines in a toggle heading or an ordinary toggle-list item, keep the toggle arrow aligned with the top and first line instead of vertically centering it across the full title height. The same rule applies while an empty toggle displays its `Empty toggle. Click to add a block.` child action. Retain the existing single-line appearance. Validate the rendered arrow and title rectangles for heading toggles, ordinary populated toggles, and empty-child toggles.
+
+## Follow-up: Unified Toggle Keyboard Semantics
+
+Treat an ordinary toggle-list item and a toggle heading as the same behavioral unit. Their only semantic difference in NotePane is the title block's presentation: ordinary inline text versus heading level 1 through 4. Route Enter for both types through one type-neutral keyboard helper before BlockNote's type-specific shortcuts.
+
+- A non-empty title at its end creates and focuses a new first child paragraph.
+- An empty title converts the toggle block in place to an empty paragraph and focuses it.
+- Converting an empty toggle must preserve any existing child blocks.
+- Shift+Enter, modified Enter, a non-empty text selection, and Enter away from the title end retain their existing behavior.

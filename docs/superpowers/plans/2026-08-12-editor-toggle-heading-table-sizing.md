@@ -321,3 +321,35 @@ Extend the existing `align-items: flex-start` selector to include `.bn-block-con
 - [ ] **Step 4: Run the focused test and build**
 
 Run the test from Step 2 and `npm run build`. Expected: both pass.
+
+---
+
+### Task 6: Unify ordinary and heading toggle Enter behavior
+
+**Files:**
+- Delete: `src/toggleHeadingKeyboard.js`
+- Create: `src/toggleKeyboard.js`
+- Modify: `src/main.jsx` import and editor keydown capture
+- Test: `tests/e2e/renderer.spec.mjs` in the toggle keyboard section
+
+**Interfaces:**
+- Consumes: a BlockNote editor and DOM KeyboardEvent.
+- Produces: `handleToggleEnter(editor, event): boolean` for both `toggleListItem` and toggleable `heading` blocks.
+
+- [ ] **Step 1: Add failing matrix tests**
+
+For ordinary and heading toggles, verify a non-empty title Enter creates the first child. Separately verify an empty title Enter produces a paragraph, removes the toggle UI, focuses the paragraph, and retains any existing children.
+
+- [ ] **Step 2: Verify RED**
+
+```bash
+npx playwright test tests/e2e/renderer.spec.mjs --grep "uses identical Enter behavior for ordinary and heading toggles|removes empty ordinary and heading toggles on Enter"
+```
+
+- [ ] **Step 3: Replace the heading-only helper**
+
+Create `handleToggleEnter` with one `isToggleBlock` predicate covering `toggleListItem` and `heading` with `isToggleable: true`. Empty inline content calls `editor.updateBlock(block, { type: "paragraph", props: {} })`; non-empty content at the title end uses the existing first-child insertion path.
+
+- [ ] **Step 4: Verify focused behavior and build**
+
+Run the tests from Step 2, the adjacent Shift+Enter/alignment tests, and `npm run build`.

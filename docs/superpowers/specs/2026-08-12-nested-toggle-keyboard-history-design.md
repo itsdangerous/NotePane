@@ -24,6 +24,14 @@ At the start of an inline block, `> Space` changes only the toggle layer:
 - the shortcut marker is removed from visible content only as part of the toggle conversion;
 - a newly created toggle starts collapsed and has no empty-child action visible.
 
+At the start of a toggle title, `# Space` through `#### Space` changes only the base format while preserving the toggle layer:
+
+- an ordinary toggle plus `# Space` becomes a heading 1 toggle;
+- an ordinary toggle plus `## Space` becomes a heading 2 toggle, and likewise through heading 4;
+- a heading toggle plus a different heading marker changes to that heading level while remaining toggleable;
+- the toggle's collapsed or expanded state and all child blocks remain unchanged;
+- undo restores the previous base format and the typed heading marker while leaving the toggle layer enabled.
+
 Empty toggle exit behavior follows the same model:
 
 - Enter or Backspace on an empty ordinary toggle returns to an empty paragraph;
@@ -55,6 +63,13 @@ paragraph
 -> Cmd+Z undoes the heading conversion and restores paragraph with "##" content
 ```
 
+```text
+ordinary toggle
+-> type "##" at the title start then Space changes the base to heading 2
+-> Cmd+Z restores the ordinary toggle with leading "##" in its title
+-> Cmd+Shift+Z restores the heading 2 toggle
+```
+
 The first undo after a toggle conversion must never flatten a heading. Redo must replay the same layers in the forward order.
 
 Implementation will use explicit ProseMirror history boundaries around NotePane's conversion command rather than timing assumptions or delayed DOM edits. BlockNote remains responsible for rendering and document persistence.
@@ -64,6 +79,7 @@ Implementation will use explicit ProseMirror history boundaries around NotePane'
 Move all NotePane toggle keyboard behavior into `src/toggleKeyboard.js`:
 
 - recognize `> Space` against the current BlockNote block and text selection;
+- recognize heading markers against both non-toggle and toggle title blocks;
 - resolve the base format and heading level;
 - apply or remove only the toggle layer;
 - manage the persisted expanded-state key;
@@ -81,6 +97,8 @@ Renderer E2E tests will cover:
 - heading levels 1-4 converted to toggle headings, then one undo restoring the same heading level and `>`;
 - a second undo after heading-toggle undo restoring the paragraph and heading marker;
 - redo replaying base-format and toggle-layer conversions in order;
+- ordinary toggles promoted to heading toggle levels 1-4 without losing toggle state or children;
+- heading toggle level changes and their independent undo/redo steps;
 - Enter and Backspace exits for empty ordinary and heading toggles;
 - child creation, child preservation, Shift+Enter, collapsed creation, and expanded-state cleanup;
 - shortcut and slash-menu toggle creation invariants.

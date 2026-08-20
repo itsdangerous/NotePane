@@ -1,21 +1,27 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SideMenuExtension } from "@blocknote/core/extensions";
 import {
   AddBlockButton,
-  BlockColorsItem,
+  blockTypeSelectItems as getBlockTypeSelectItems,
   DragHandleButton,
   DragHandleMenu,
   RemoveBlockItem,
   SideMenu,
   SideMenuController,
   useBlockNoteEditor,
+  useComponentsContext,
   useExtension,
   useExtensionState,
 } from "@blocknote/react";
-import { Palette, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Palette, Trash2 } from "lucide-react";
+import { EditorColorPickerSections } from "./editorColorFormatting.jsx";
 
-export function NotePaneSideMenuController({ portalElement }) {
+export function NotePaneSideMenuController({ portalElement, recentColors, onColorUsed }) {
   const editor = useBlockNoteEditor();
+  const SideMenu = useCallback(
+    () => <NotePaneSideMenu recentColors={recentColors} onColorUsed={onColorUsed} />,
+    [onColorUsed, recentColors],
+  );
   const blockId = useExtensionState("sideMenu", {
     selector: (state) => state?.block?.id,
   });
@@ -61,36 +67,146 @@ export function NotePaneSideMenuController({ portalElement }) {
   return (
     <SideMenuController
       portalElement={portalElement}
-      sideMenu={NotePaneSideMenu}
+      sideMenu={SideMenu}
     />
   );
 }
 
-function NotePaneSideMenu() {
+function NotePaneSideMenu({ recentColors, onColorUsed }) {
+  const DragHandleMenu = useCallback(
+    () => <NotePaneDragHandleMenu recentColors={recentColors} onColorUsed={onColorUsed} />,
+    [onColorUsed, recentColors],
+  );
+
   return (
     <SideMenu>
       <AddBlockButton />
-      <DragHandleButton dragHandleMenu={NotePaneDragHandleMenu} />
+      <DragHandleButton dragHandleMenu={DragHandleMenu} />
     </SideMenu>
   );
 }
 
-function NotePaneDragHandleMenu() {
+function NotePaneDragHandleMenu({ recentColors, onColorUsed }) {
+  const Components = useComponentsContext();
+  const [activePanel, setActivePanel] = useState(null);
+
+  if (!Components) {
+    return null;
+  }
+
   return (
     <DragHandleMenu>
+      <Components.Generic.Menu.Item
+        className="bn-menu-item"
+        closeMenuOnClick={false}
+        onClick={() => setActivePanel("turn-into")}
+        onPointerEnter={() => setActivePanel("turn-into")}
+      >
+        <span className="notepane-block-menu-item-content">
+          <ArrowRightLeft className="notepane-block-menu-icon is-turn-into" aria-hidden="true" />
+          Turn into
+        </span>
+      </Components.Generic.Menu.Item>
+      <Components.Generic.Menu.Item
+        className="bn-menu-item"
+        closeMenuOnClick={false}
+        onClick={() => setActivePanel("colors")}
+        onPointerEnter={() => setActivePanel("colors")}
+      >
+        <span className="notepane-block-menu-item-content">
+          <Palette className="notepane-block-menu-icon is-colors" aria-hidden="true" />
+          Colors
+        </span>
+      </Components.Generic.Menu.Item>
       <RemoveBlockItem>
         <span className="notepane-block-menu-item-content">
-          <Trash2 aria-hidden="true" />
+          <Trash2 className="notepane-block-menu-icon is-delete" aria-hidden="true" />
           Delete
         </span>
       </RemoveBlockItem>
-      <BlockColorsItem>
-        <span className="notepane-block-menu-item-content">
-          <Palette aria-hidden="true" />
-          Colors
-        </span>
-      </BlockColorsItem>
+      <BlockMenuSubpanel
+        activePanel={activePanel}
+        recentColors={recentColors}
+        onColorUsed={onColorUsed}
+      />
     </DragHandleMenu>
+  );
+}
+
+function BlockMenuSubpanel({ activePanel, recentColors, onColorUsed }) {
+  const Components = useComponentsContext();
+  const editor = useBlockNoteEditor();
+  const sideMenu = useExtension(SideMenuExtension);
+  const block = useExtensionState("sideMenu", {
+    selector: (state) => state?.block,
+  });
+
+  if (!Components || !block || !activePanel) {
+    return null;
+  }
+
+  const blockTypeItems = getBlockTypeSelectItems(editor.dictionary).filter(
+    (item) => item.type !== "heading" || Number(item.props?.level ?? 1) <= 4,
+  );
+  const selectedBlocks = editor.getSelection()?.blocks;
+  const targetBlocks = selectedBlocks?.some((selectedBlock) => selectedBlock.id === block.id)
+    ? selectedBlocks
+    : [block];
+
+  const updateSelectedBlocks = (update) => {
+    editor.focus();
+    editor.transact(() => {
+      for (const targetBlock of targetBlocks) {
+        editor.updateBlock(targetBlock, update(targetBlock));
+      }
+    });
+  };
+
+  return (
+    <div
+      className="notepane-block-menu-subpanel"
+      data-panel={activePanel}
+      role="menu"
+      aria-label={activePanel === "turn-into" ? "Turn into" : "Colors"}
+    >
+      {activePanel === "turn-into" ? blockTypeItems.map((item) => {
+          const Icon = item.icon;
+          const isCurrentType = item.type === block.type && Object.entries(item.props || {})
+            .every(([key, value]) => block.props[key] === value);
+          return (
+            <Components.Generic.Menu.Item
+              className="bn-menu-item notepane-block-type-menu-item"
+              checked={isCurrentType}
+              key={`${item.type}-${JSON.stringify(item.props || {})}`}
+              onClick={() => {
+                updateSelectedBlocks(() => ({ type: item.type, props: item.props }));
+                sideMenu.unfreezeMenu();
+              }}
+            >
+              <span className="notepane-block-menu-item-content">
+                <Icon className="notepane-block-menu-icon is-block-type" size={16} aria-hidden="true" />
+                {item.name}
+              </span>
+            </Components.Generic.Menu.Item>
+          );
+        }) : (
+          <>
+            <EditorColorPickerSections
+              recentColors={recentColors}
+              state={{
+                textColor: block.props.textColor || "default",
+                backgroundColor: block.props.backgroundColor || "default",
+              }}
+              onSelect={({ kind, color }) => {
+                updateSelectedBlocks(() => ({
+                  props: { [kind === "text" ? "textColor" : "backgroundColor"]: color },
+                }));
+                onColorUsed?.({ kind, color });
+              }}
+            />
+          </>
+        )}
+    </div>
   );
 }
 

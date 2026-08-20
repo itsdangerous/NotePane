@@ -3636,8 +3636,6 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
   background: transparent;
   box-shadow: inset 0 0 0 2px var(--sticky-table-focused-border-color);
   pointer-events: none;
-  transition: 120ms ease-out;
-  transition-property: top, left, width, height, box-shadow;
 }
 
 .bn-editor .selectedCell::after {
@@ -3775,6 +3773,23 @@ body.theme-dark .bn-mantine :is(.bn-tooltip, .mantine-Tooltip-tooltip) {
 .mantine-Menu-dropdown :is(.mantine-Menu-itemSection, .mantine-Menu-itemLabel, [role="menuitem"] *),
 .bn-table-handle-menu :is(.mantine-Menu-itemSection, .mantine-Menu-itemLabel, [role="menuitem"] *) {
   color: inherit !important;
+}
+
+.bn-menu-dropdown .notepane-block-menu-icon {
+  color: var(--sticky-panel-muted) !important;
+}
+
+.bn-menu-dropdown .notepane-block-menu-icon.is-turn-into,
+.bn-menu-dropdown .notepane-block-menu-icon.is-block-type {
+  color: #4d79b8 !important;
+}
+
+.bn-menu-dropdown .notepane-block-menu-icon.is-colors {
+  color: #a45bb9 !important;
+}
+
+.bn-menu-dropdown .notepane-block-menu-icon.is-delete {
+  color: var(--icon-tone-delete, #c14a4a) !important;
 }
 
 .bn-menu-dropdown :is(.mantine-Divider-root, .mantine-Menu-divider),
@@ -4192,6 +4207,31 @@ div:has(> .bn-formatting-toolbar.notepane-formatting-toolbar.is-table-context) {
   max-height: calc(100vh - 16px) !important;
   overflow: auto !important;
   scrollbar-color: var(--sticky-scrollbar-thumb) var(--sticky-scrollbar-track);
+}
+
+.bn-drag-handle-menu {
+  z-index: 1300 !important;
+  overflow: visible !important;
+}
+
+.notepane-block-menu-subpanel {
+  position: absolute;
+  z-index: 1301;
+  top: 0;
+  left: calc(100% + 5px);
+  width: 190px;
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--sticky-portal-menu-border-color);
+  border-radius: 8px;
+  background: var(--sticky-portal-menu-bg);
+  box-shadow: var(--sticky-portal-menu-shadow, var(--sticky-menu-shadow));
+}
+
+.notepane-block-menu-subpanel[data-panel="colors"] {
+  width: 180px;
+  padding: 9px;
 }
 
 .bn-suggestion-menu[role="listbox"] {

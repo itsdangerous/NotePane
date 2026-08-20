@@ -288,37 +288,45 @@ function RecentColorStyleButton({ recentColors, onColorUsed }) {
       <Components.Generic.Menu.Dropdown
         className="bn-menu-dropdown bn-color-picker-dropdown notion-color-picker-dropdown"
       >
-        <div className="notion-color-picker-content">
-          {recentColors.length > 0 && (
-            <ColorSection
-              title="Recently used"
-              choices={recentColors}
-              state={state}
-              colorLabels={dictionary.color_picker.colors}
-              onSelect={applyColor}
-              recent
-            />
-          )}
-          <ColorSection
-            title="Text color"
-            choices={EDITOR_COLOR_VALUES.map((color) => ({ kind: "text", color }))}
-            state={state}
-            colorLabels={dictionary.color_picker.colors}
-            onSelect={applyColor}
-          />
-          <ColorSection
-            title="Background color"
-            choices={EDITOR_COLOR_VALUES.map((color) => ({
-              kind: "background",
-              color,
-            }))}
-            state={state}
-            colorLabels={dictionary.color_picker.colors}
-            onSelect={applyColor}
-          />
-        </div>
+        <EditorColorPickerSections
+          recentColors={recentColors}
+          state={state}
+          onSelect={applyColor}
+        />
       </Components.Generic.Menu.Dropdown>
     </Components.Generic.Menu.Root>
+  );
+}
+
+export function EditorColorPickerSections({ recentColors = [], state, onSelect }) {
+  const editor = useBlockNoteEditor();
+  return (
+    <div className="notion-color-picker-content">
+      {recentColors.length > 0 && (
+        <ColorSection
+          title="Recently used"
+          choices={recentColors}
+          state={state}
+          colorLabels={editor.dictionary.color_picker.colors}
+          onSelect={onSelect}
+          recent
+        />
+      )}
+      <ColorSection
+        title="Text color"
+        choices={EDITOR_COLOR_VALUES.map((color) => ({ kind: "text", color }))}
+        state={state}
+        colorLabels={editor.dictionary.color_picker.colors}
+        onSelect={onSelect}
+      />
+      <ColorSection
+        title="Background color"
+        choices={EDITOR_COLOR_VALUES.map((color) => ({ kind: "background", color }))}
+        state={state}
+        colorLabels={editor.dictionary.color_picker.colors}
+        onSelect={onSelect}
+      />
+    </div>
   );
 }
 

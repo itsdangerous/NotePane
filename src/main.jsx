@@ -1266,7 +1266,9 @@ function StickyEditor({
   }, [editor]);
 
   const [title, setTitle] = useState(initialDisplayTitle);
-  const tableCellSelectAllRef = useRef(null);
+  const editorSurfaceRef = useRef(null);
+  const suppressFocusedTableCellRef = useRef(false);
+  const pendingTableExtensionFocusRef = useRef(null);
   const focusedTableCellElementRef = useRef(null);
   const focusedTableCellResizeObserverRef = useRef(null);
   const [focusedTableCellRect, setFocusedTableCellRect] = useState(null);
@@ -1276,11 +1278,28 @@ function StickyEditor({
     false,
   );
   const updateFocusedTableCell = useCallback(() => {
-    const selection = window.getSelection();
-    const selectionNode = selection?.focusNode;
-    const cell = (selectionNode instanceof Element ? selectionNode : selectionNode?.parentElement)
+    if (suppressFocusedTableCellRef.current) {
+      focusedTableCellResizeObserverRef.current?.disconnect();
+      focusedTableCellElementRef.current = null;
+      setFocusedTableCellRect(null);
+      return;
+    }
+
+    const view = editor.prosemirrorView;
+    const selection = view?.state.selection;
+    const preservedCell = pendingTableExtensionFocusRef.current
+      ? getTableCellElementForSnapshot(editor, pendingTableExtensionFocusRef.current)
+      : null;
+    const cellRange = getCurrentTableCellRange(selection);
+    const cellNode = cellRange ? view?.nodeDOM(cellRange.cellPos) : null;
+    const selectedCell = (cellNode instanceof Element ? cellNode : cellNode?.parentElement)
       ?.closest("td, th");
-    if (!selection?.isCollapsed || !cell || cell.classList.contains("selectedCell")) {
+    const cell = preservedCell || selectedCell;
+    if (
+      (!preservedCell && !selection?.empty) ||
+      !cell ||
+      cell.classList.contains("selectedCell")
+    ) {
       focusedTableCellResizeObserverRef.current?.disconnect();
       focusedTableCellElementRef.current = null;
       setFocusedTableCellRect(null);
@@ -1307,7 +1326,7 @@ function StickyEditor({
       height: bottom - top,
       text: cell.textContent?.trim() || "",
     });
-  }, []);
+  }, [editor]);
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       window.requestAnimationFrame(updateFocusedTableCell);
@@ -1321,6 +1340,67 @@ function StickyEditor({
       focusedTableCellResizeObserverRef.current = null;
     };
   }, [updateFocusedTableCell]);
+  useEffect(() => {
+    const surface = editorSurfaceRef.current;
+    if (!surface) {
+      return undefined;
+    }
+
+    const updateAfterScroll = () => {
+      window.requestAnimationFrame(updateFocusedTableCell);
+    };
+    surface.addEventListener("scroll", updateAfterScroll, { passive: true });
+    return () => surface.removeEventListener("scroll", updateAfterScroll);
+  }, [updateFocusedTableCell]);
+  useEffect(() => {
+    const isTableExtensionButton = (target) => (
+      target instanceof Element && target.closest(
+        ".bn-extend-button-add-remove-columns, .bn-extend-button-add-remove-rows",
+      )
+    );
+    const captureFocusedCellBeforeTableExtension = (event) => {
+      if (!isTableExtensionButton(event.target)) {
+        return;
+      }
+
+      pendingTableExtensionFocusRef.current = getFocusedTableCellSnapshot(editor);
+    };
+    const restoreFocusedCellAfterTableExtension = () => {
+      const pendingSnapshot = pendingTableExtensionFocusRef.current;
+      if (!pendingSnapshot) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        const snapshot = pendingTableExtensionFocusRef.current;
+        pendingTableExtensionFocusRef.current = null;
+        if (snapshot && restoreFocusedTableCell(editor, snapshot)) {
+          updateFocusedTableCell();
+        }
+      });
+    };
+
+    const handleTableExtensionMouseUp = () => {
+      restoreFocusedCellAfterTableExtension();
+    };
+    const handleTableExtensionClick = (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest(
+        ".bn-extend-button-add-remove-columns, .bn-extend-button-add-remove-rows",
+      )) {
+        return;
+      }
+      restoreFocusedCellAfterTableExtension();
+    };
+
+    document.addEventListener("mousedown", captureFocusedCellBeforeTableExtension, true);
+    document.addEventListener("mouseup", handleTableExtensionMouseUp, true);
+    document.addEventListener("click", handleTableExtensionClick, true);
+    return () => {
+      document.removeEventListener("mousedown", captureFocusedCellBeforeTableExtension, true);
+      document.removeEventListener("mouseup", handleTableExtensionMouseUp, true);
+      document.removeEventListener("click", handleTableExtensionClick, true);
+    };
+  }, [editor, updateFocusedTableCell]);
   const updateTableCellSelectionMode = useCallback(() => {
     const selection = editor.prosemirrorView?.state.selection;
     setIsMultiTableCellSelection(
@@ -2342,6 +2422,15 @@ function StickyEditor({
       if (event.key === "Tab") {
         if (isEditorShortcutTarget(event.target)) {
           setIsEditorActive(true);
+          if (event.isComposing) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+          }
+          if (moveTableTextCursorToAdjacentCell(editor, event.shiftKey ? -1 : 1)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
         }
         return;
       }
@@ -2383,22 +2472,25 @@ function StickyEditor({
 
       if (key === "a") {
         event.preventDefault();
+        if (isCurrentTableSelection(editor)) {
+          if (isCurrentTableFullySelected(editor)) {
+            selectAllBlocks(editor);
+          } else {
+            selectCurrentTable(editor);
+          }
+          return;
+        }
         const tableCellRange = getCurrentTableCellRange(
           editor.prosemirrorView?.state.selection,
         );
-        if (tableCellRange && tableCellSelectAllRef.current === tableCellRange.cellPos) {
-          tableCellSelectAllRef.current = null;
-          selectAllBlocks(editor);
+        if (tableCellRange) {
+          if (isCurrentTableCellContentSelected(editor, tableCellRange)) {
+            selectCurrentTableCell(editor);
+          } else {
+            selectCurrentTableCellContent(editor);
+          }
           return;
         }
-        if (
-          editor.prosemirrorView?.state.selection.empty &&
-          selectCurrentTableCellContent(editor)
-        ) {
-          tableCellSelectAllRef.current = tableCellRange?.cellPos ?? null;
-          return;
-        }
-        tableCellSelectAllRef.current = null;
         if (isSelectionInsideCodeBlock(editor)) {
           selectCurrentCodeBlockContent(editor);
           return;
@@ -2413,6 +2505,29 @@ function StickyEditor({
 
       event.preventDefault();
       void cutCurrentBlocks(editor, activeImageBlockId, scheduleSave);
+    };
+
+    const handleTextSelectionToolbarEscape = (event) => {
+      if (
+        event.key !== "Escape" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !isEditorShortcutTarget(event.target) ||
+        editor.prosemirrorView?.state.selection.empty ||
+        editor.prosemirrorView?.state.selection.$anchorCell ||
+        !isVisibleElement(document.querySelector(".bn-formatting-toolbar"))
+      ) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        if (!isVisibleElement(document.querySelector(".bn-formatting-toolbar"))) {
+          editor.focus();
+          setIsEditorActive(true);
+        }
+      });
     };
 
     const handleEditorTabKeyDown = (event) => {
@@ -2439,22 +2554,6 @@ function StickyEditor({
           editor.focus();
         }
       });
-    };
-
-    const handleTableTabKeyDownCapture = (event) => {
-      if (
-        event.key !== "Tab" ||
-        !isEditorShortcutTarget(event.target) ||
-        !editor.prosemirrorView?.state.selection.empty
-      ) {
-        return;
-      }
-
-      if (moveTableTextCursorToAdjacentCell(editor, event.shiftKey ? -1 : 1)) {
-        event.preventDefault();
-        event.stopPropagation();
-        setIsEditorActive(true);
-      }
     };
 
     const handleTableCellArrowKeyDownCapture = (event) => {
@@ -2565,7 +2664,7 @@ function StickyEditor({
     };
 
     document.addEventListener("keydown", handleEditorKeyDownCapture, true);
-    document.addEventListener("keydown", handleTableTabKeyDownCapture, true);
+    document.addEventListener("keydown", handleTextSelectionToolbarEscape, true);
     document.addEventListener("keydown", handleTableCellArrowKeyDownCapture, true);
     document.addEventListener("keydown", handleTableCellModeEscapeKeyDownCapture, true);
     document.addEventListener("keydown", handleTableCellMergeSplitKeyDownCapture, true);
@@ -2574,7 +2673,7 @@ function StickyEditor({
     document.addEventListener("keydown", handleEditorTabKeyDown);
     return () => {
       document.removeEventListener("keydown", handleEditorKeyDownCapture, true);
-      document.removeEventListener("keydown", handleTableTabKeyDownCapture, true);
+      document.removeEventListener("keydown", handleTextSelectionToolbarEscape, true);
       document.removeEventListener("keydown", handleTableCellArrowKeyDownCapture, true);
       document.removeEventListener("keydown", handleTableCellModeEscapeKeyDownCapture, true);
       document.removeEventListener("keydown", handleTableCellMergeSplitKeyDownCapture, true);
@@ -3832,6 +3931,7 @@ function StickyEditor({
           </aside>
         )}
         <section
+          ref={editorSurfaceRef}
           className={[
             "sticky-editor-surface",
             isTableOfContentsVisible ? "has-table-of-contents" : "",
@@ -3855,13 +3955,21 @@ function StickyEditor({
               setIsEditorActive(false);
             }
           }}
-          onPointerDownCapture={() => {
+          onPointerDownCapture={(event) => {
             setIsEditorActive(true);
             setIsTableCellSelectionDismissed(false);
-            tableCellSelectAllRef.current = null;
+            suppressFocusedTableCellRef.current = isBlankTableSurfacePointer(event);
+            if (suppressFocusedTableCellRef.current) {
+              event.preventDefault();
+              focusedTableCellResizeObserverRef.current?.disconnect();
+              focusedTableCellElementRef.current = null;
+              setFocusedTableCellRect(null);
+            }
           }}
           onPointerUpCapture={() => {
-            window.requestAnimationFrame(updateFocusedTableCell);
+            if (!suppressFocusedTableCellRef.current) {
+              window.requestAnimationFrame(updateFocusedTableCell);
+            }
           }}
           onMouseDown={focusLastBlockFromEmptySurface}
         >
@@ -3940,7 +4048,10 @@ function StickyEditor({
               hidden={isTableCellSelectionDismissed}
             />
             <BlockMenuHighlightController />
-            <NotePaneSideMenuController />
+            <NotePaneSideMenuController
+              recentColors={recentEditorColors}
+              onColorUsed={onEditorColorUsed}
+            />
           </BlockNoteView>
           {codeBlockToolTargets.map(({ blockId, element }) => (
             <CodeBlockTools
@@ -9497,6 +9608,22 @@ function isEditorShortcutTarget(target) {
   );
 }
 
+function isVisibleElement(element) {
+  if (!(element instanceof Element)) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    Number(style.opacity) > 0.01 &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
 function isEditableFormTarget(target) {
   return target instanceof Element && Boolean(target.closest("input, textarea, select"));
 }
@@ -9834,6 +9961,23 @@ function selectCurrentCodeBlockContent(editor) {
   return true;
 }
 
+function selectCurrentTableCell(editor) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  const cellRange = getCurrentTableCellRange(state?.selection);
+  if (!view || !state || !cellRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(CellSelection.create(state.doc, cellRange.cellPos))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
 function selectCurrentTableCellContent(editor) {
   const view = editor.prosemirrorView;
   const state = view?.state;
@@ -9854,21 +9998,51 @@ function selectCurrentTableCellContent(editor) {
   return true;
 }
 
-function selectCurrentTableCell(editor) {
+function isCurrentTableCellContentSelected(editor, cellRange) {
+  const selectedText = window.getSelection()?.toString() ?? "";
+  const cellNode = editor.prosemirrorView?.nodeDOM(cellRange.cellPos);
+  const cellElement = cellNode instanceof Element
+    ? cellNode.closest("td, th")
+    : cellNode?.parentElement?.closest("td, th");
+  return Boolean(selectedText && selectedText === cellElement?.textContent);
+}
+
+function selectCurrentTable(editor) {
   const view = editor.prosemirrorView;
   const state = view?.state;
-  const cellRange = getCurrentTableCellRange(state?.selection);
-  if (!view || !state || !cellRange) {
+  const cellPositions = getCurrentTableCellPositions(state?.selection);
+  if (!view || !state || cellPositions.length === 0) {
     return false;
   }
 
   view.dispatch(
     state.tr
-      .setSelection(CellSelection.create(state.doc, cellRange.cellPos))
+      .setSelection(CellSelection.create(
+        state.doc,
+        cellPositions[0],
+        cellPositions[cellPositions.length - 1],
+      ))
       .scrollIntoView(),
   );
   view.focus();
   return true;
+}
+
+function isCurrentTableSelection(editor) {
+  const selection = editor.prosemirrorView?.state.selection;
+  return Boolean(selection?.$anchorCell && selection?.$headCell);
+}
+
+function isCurrentTableFullySelected(editor) {
+  const selection = editor.prosemirrorView?.state.selection;
+  const cellPositions = getCurrentTableCellPositions(selection);
+  return Boolean(
+    selection?.$anchorCell &&
+      selection?.$headCell &&
+      cellPositions.length > 0 &&
+      selection.$anchorCell.pos === cellPositions[0] &&
+      selection.$headCell.pos === cellPositions[cellPositions.length - 1],
+  );
 }
 
 function moveTableTextCursorToAdjacentCell(editor, direction) {
@@ -9879,25 +10053,7 @@ function moveTableTextCursorToAdjacentCell(editor, direction) {
     return false;
   }
 
-  let tableDepth = null;
-  for (let depth = state.selection.$from.depth; depth > 0; depth -= 1) {
-    if (state.selection.$from.node(depth).type.spec.tableRole === "table") {
-      tableDepth = depth;
-      break;
-    }
-  }
-  if (tableDepth === null) {
-    return false;
-  }
-
-  const tablePosition = state.selection.$from.before(tableDepth);
-  const cellPositions = [];
-  state.selection.$from.node(tableDepth).descendants((node, position) => {
-    const tableRole = node.type.spec.tableRole;
-    if (tableRole === "cell" || tableRole === "header_cell") {
-      cellPositions.push(tablePosition + position + 1);
-    }
-  });
+  const cellPositions = getCurrentTableCellPositions(state.selection);
   const currentIndex = cellPositions.indexOf(currentCellRange.cellPos);
   const nextCellPosition = cellPositions[currentIndex + direction];
   if (currentIndex < 0 || typeof nextCellPosition !== "number") {
@@ -9918,6 +10074,34 @@ function moveTableTextCursorToAdjacentCell(editor, direction) {
   );
   view.focus();
   return true;
+}
+
+function getCurrentTableCellPositions(selection) {
+  const $from = selection?.$from;
+  if (!$from) {
+    return [];
+  }
+
+  let tableDepth = null;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type.spec.tableRole === "table") {
+      tableDepth = depth;
+      break;
+    }
+  }
+  if (tableDepth === null) {
+    return [];
+  }
+
+  const tablePosition = $from.before(tableDepth);
+  const cellPositions = [];
+  $from.node(tableDepth).descendants((node, position) => {
+    const tableRole = node.type.spec.tableRole;
+    if (tableRole === "cell" || tableRole === "header_cell") {
+      cellPositions.push(tablePosition + position + 1);
+    }
+  });
+  return cellPositions;
 }
 
 function moveSelectedTableCell(editor, key) {
@@ -10008,6 +10192,74 @@ function getCurrentTableCellRange(selection) {
   return null;
 }
 
+function getFocusedTableCellSnapshot(editor) {
+  const view = editor.prosemirrorView;
+  const selection = view?.state.selection;
+  const cellRange = getCurrentTableCellRange(selection);
+  if (!view || !selection?.empty || !cellRange) {
+    return null;
+  }
+
+  const cellNode = view.nodeDOM(cellRange.cellPos);
+  const cell = (cellNode instanceof Element ? cellNode : cellNode?.parentElement)
+    ?.closest("td, th");
+  const row = cell?.parentElement;
+  const table = cell?.closest("table");
+  const block = cell?.closest(".bn-block-outer[data-id]");
+  if (!(row instanceof HTMLTableRowElement) || !table || !block?.dataset.id) {
+    return null;
+  }
+
+  const rowIndex = Array.prototype.indexOf.call(table.rows, row);
+  if (rowIndex < 0 || cell.cellIndex < 0) {
+    return null;
+  }
+
+  return {
+    blockId: block.dataset.id,
+    rowIndex,
+    columnIndex: cell.cellIndex,
+  };
+}
+
+function restoreFocusedTableCell(editor, snapshot) {
+  const view = editor.prosemirrorView;
+  const state = view?.state;
+  if (!view || !state) {
+    return false;
+  }
+
+  const targetCell = getTableCellElementForSnapshot(editor, snapshot);
+  if (!targetCell) {
+    return false;
+  }
+
+  const cellPosition = view.posAtDOM(targetCell, 0);
+  const cellRange = getCurrentTableCellRange({
+    $from: state.doc.resolve(cellPosition),
+  });
+  if (!cellRange) {
+    return false;
+  }
+
+  view.dispatch(
+    state.tr
+      .setSelection(TextSelection.near(state.doc.resolve(cellRange.to), -1))
+      .scrollIntoView(),
+  );
+  view.focus();
+  return true;
+}
+
+function getTableCellElementForSnapshot(editor, snapshot) {
+  const block = editor.prosemirrorView?.dom.querySelector(
+    `.bn-block-outer[data-id="${CSS.escape(snapshot.blockId)}"]`,
+  );
+  const cell = block?.querySelector("table")?.rows[snapshot.rowIndex]
+    ?.cells[snapshot.columnIndex];
+  return cell instanceof HTMLTableCellElement ? cell : null;
+}
+
 function selectAllEditorDocument(editor) {
   const view = editor.prosemirrorView;
   const state = view?.state;
@@ -10060,6 +10312,16 @@ function isEmptyEditorSurfacePointer(event) {
   }
 
   return Boolean(target.closest("[data-testid='sticky-editor-surface']"));
+}
+
+function isBlankTableSurfacePointer(event) {
+  if (event.button !== 0 || !(event.target instanceof Element)) {
+    return false;
+  }
+
+  return Boolean(
+    event.target.closest("table") && !event.target.closest("td, th"),
+  );
 }
 
 function isEmptySessionDocument(blocks) {

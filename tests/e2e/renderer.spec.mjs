@@ -4123,6 +4123,20 @@ test("shows floating formatting toolbar after text selection", async ({ page }) 
   expect(selectedTypeGap).toBeGreaterThanOrEqual(8);
 });
 
+test("returns focus to the editor after Escape closes the text selection toolbar", async ({ page }) => {
+  await loadTemplatePreview(page);
+  const styledText = page.getByText("Styled Text");
+  await styledText.scrollIntoViewIfNeeded();
+  await styledText.dblclick();
+
+  const formattingToolbar = page.locator(".bn-formatting-toolbar");
+  await expect(formattingToolbar).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await expect(formattingToolbar).toBeHidden();
+  await expectEditorFocused(page);
+});
+
 test("shows an opaque compact link form and creates the selected-text link", async ({ page }) => {
   await clickLastEmptyParagraph(page);
   await page.keyboard.type("Link target");
@@ -4362,20 +4376,61 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
 
   const blockMenu = page.locator(".bn-drag-handle-menu:visible");
   await expect(blockMenu).toBeVisible();
-  await expect(blockMenu.getByRole("menuitem")).toHaveCount(2);
+  await expect(blockMenu.getByRole("menuitem")).toHaveCount(3);
   await expect(blockMenu.locator(".notepane-block-menu-item-content svg"))
-    .toHaveCount(2);
+    .toHaveCount(3);
+  await expect(blockMenu.getByRole("menuitem").last()).toHaveAccessibleName("Delete");
+  await expect.poll(() => blockMenu.locator(".notepane-block-menu-icon").evaluateAll((icons) =>
+    icons.map((icon) => getComputedStyle(icon).color),
+  )).toEqual(["rgb(77, 121, 184)", "rgb(164, 91, 185)", "rgb(193, 74, 74)"]);
   await expectBlockNoteFloatingMenuInsideViewport(page, ".bn-drag-handle-menu", 60);
+  await page.getByRole("menuitem", { name: "Turn into" }).click();
+  const blockTypeMenu = page.locator(
+    ".notepane-block-menu-subpanel[data-panel='turn-into']:visible",
+  );
+  await expect(blockTypeMenu).toBeVisible();
+  await expectBlockNoteFloatingMenuInsideViewport(
+    page,
+    ".notepane-block-menu-subpanel[data-panel='turn-into']",
+    220,
+    "absolute",
+  );
+  await expect.poll(async () => {
+    const [parentZIndex, submenuZIndex] = await Promise.all([
+      blockMenu.evaluate((element) => Number(getComputedStyle(element).zIndex)),
+      blockTypeMenu.evaluate((element) => Number(getComputedStyle(element).zIndex)),
+    ]);
+    return submenuZIndex > parentZIndex;
+  }).toBe(true);
+  await blockTypeMenu.getByRole("menuitem", { name: "Heading 2", exact: true }).click();
+  await expect(paragraph.locator("xpath=ancestor::h2")).toHaveCount(1);
+  await expect(blockMenu).toHaveCount(0);
+  await paragraph.click();
+  const convertedParagraphBox = await paragraph.boundingBox();
+  await page.mouse.move(
+    convertedParagraphBox.x - 24,
+    convertedParagraphBox.y + convertedParagraphBox.height / 2,
+  );
+  await openBlockMenuButton.click();
+  await expect(blockMenu).toBeVisible();
   const blockMenuTopBeforeColors = await blockMenu.evaluate((element) =>
     Math.round(element.getBoundingClientRect().top),
   );
   await page.getByRole("menuitem", { name: "Colors" }).first().click();
-  await expect(page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible"))
+  await expect(page.locator(".notepane-block-menu-subpanel[data-panel='colors']:visible"))
     .toBeVisible();
+  await expect.poll(async () => {
+    const [parentZIndex, submenuZIndex] = await Promise.all([
+      blockMenu.evaluate((element) => Number(getComputedStyle(element).zIndex)),
+      page.locator(".notepane-block-menu-subpanel[data-panel='colors']:visible")
+        .evaluate((element) => Number(getComputedStyle(element).zIndex)),
+    ]);
+    return submenuZIndex > parentZIndex;
+  }).toBe(true);
   await expectBlockNoteFloatingMenuInsideViewport(
     page,
-    ".bn-drag-handle-menu .bn-color-picker-dropdown",
-    220,
+    ".notepane-block-menu-subpanel[data-panel='colors']",
+    140,
     "absolute",
   );
   await expect.poll(async () =>
@@ -4386,7 +4441,7 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await expect.poll(async () =>
     await blockMenu.evaluate((element) => getComputedStyle(element).overflow),
   ).toBe("visible");
-  await page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible [data-test='text-color-red']")
+  await page.locator(".notepane-block-menu-subpanel[data-panel='colors']:visible [data-test='text-color-red']")
     .first()
     .click();
 
@@ -4402,9 +4457,9 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   );
   await openBlockMenuButton.click();
   await page.getByRole("menuitem", { name: "Colors" }).first().click();
-  await expect(page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible"))
+  await expect(page.locator(".notepane-block-menu-subpanel[data-panel='colors']:visible"))
     .toBeVisible();
-  await page.locator(".bn-drag-handle-menu .bn-color-picker-dropdown:visible [data-test='background-color-blue']")
+  await page.locator(".notepane-block-menu-subpanel[data-panel='colors']:visible [data-test='background-color-blue']")
     .first()
     .click();
 
@@ -4413,6 +4468,23 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
       getComputedStyle(element.closest(".bn-block-content")).backgroundColor,
     ),
   ).toBe("rgb(221, 235, 241)");
+
+  await paragraph.click();
+  const recoloredParagraphBox = await paragraph.boundingBox();
+  await page.mouse.move(
+    recoloredParagraphBox.x - 24,
+    recoloredParagraphBox.y + recoloredParagraphBox.height / 2,
+  );
+  await openBlockMenuButton.click();
+  await page.getByRole("menuitem", { name: "Colors" }).first().click();
+  const openColorMenu = page.locator(
+    ".notepane-block-menu-subpanel[data-panel='colors']:visible",
+  );
+  await expect(openColorMenu).toBeVisible();
+  await page.getByRole("menuitem", { name: "Turn into" }).hover();
+  await expect(blockTypeMenu).toBeVisible();
+  await expect(openColorMenu).toHaveCount(0);
+  await expect(page.locator(".notepane-block-menu-subpanel")).toHaveCount(1);
 
   await paragraph.click();
   const finalParagraphBox = await paragraph.boundingBox();
@@ -4432,7 +4504,7 @@ test("keeps BlockNote color and delete menus usable inside the app window", asyn
   await expect(openBlockMenuButton).toBeVisible();
   await openBlockMenuButton.click();
   await expect(page.locator(".bn-drag-handle-menu:visible").getByRole("menuitem"))
-    .toHaveCount(2);
+    .toHaveCount(3);
   await expect(page.getByRole("menuitem", { name: /header/i })).toHaveCount(0);
 });
 
@@ -4491,6 +4563,7 @@ test("focuses table cells without changing their drag selection behavior", async
   await loadTemplatePreview(page);
   await page.getByRole("button", { name: "Use this template" }).click();
   const activeCell = page.getByRole("cell", { name: "Tabs" }).first();
+  const tableCellCount = await page.locator(".bn-editor table td, .bn-editor table th").count();
   await activeCell.getByText("Tabs", { exact: true }).click();
 
   await expect(page.locator(".notepane-table-cell-focus-ring"))
@@ -4502,12 +4575,14 @@ test("focuses table cells without changing their drag selection behavior", async
         backgroundColor: style.backgroundColor,
         borderWidth: style.borderWidth,
         boxShadow: style.boxShadow,
+        transitionDuration: style.transitionDuration,
       };
     });
   expect(focusedCellStyle).toEqual({
     backgroundColor: "rgba(0, 0, 0, 0)",
     borderWidth: "0px",
     boxShadow: "rgba(139, 92, 246, 0.58) 0px 0px 0px 2px inset",
+    transitionDuration: "0s",
   });
   await expect.poll(() => page.locator(".notepane-table-cell-focus-ring")
     .evaluate((ring) => {
@@ -4576,6 +4651,7 @@ test("focuses table cells without changing their drag selection behavior", async
     .toHaveText("Keeping an active note above other windows");
 
   await activeCell.getByText("Tabs", { exact: true }).click();
+  await page.keyboard.insertText("한글");
   await page.keyboard.press("Tab");
   await expect.poll(() => page.evaluate(() => {
     const selection = window.getSelection();
@@ -4595,10 +4671,50 @@ test("focuses table cells without changing their drag selection behavior", async
   await page.keyboard.press(modifierShortcut("A"));
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString()))
     .toBe("Drafting, comparing, and organizing sessions");
+  await expect(page.locator(".bn-editor .selectedCell")).toHaveCount(0);
+
+  await page.keyboard.press(modifierShortcut("A"));
+  await expect(page.locator(".bn-editor .selectedCell")).toHaveCount(1);
+
+  await page.keyboard.press(modifierShortcut("A"));
+  await expect.poll(() => page.evaluate(() => {
+    return {
+      selectedCellCount: document.querySelectorAll(".bn-editor .selectedCell").length,
+    };
+  })).toMatchObject({
+    selectedCellCount: tableCellCount,
+  });
 
   await page.keyboard.press(modifierShortcut("A"));
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString()))
     .toContain("NotePane");
+});
+
+test("moves one table cell when Tab completes a Korean IME composition", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const activeCell = page.getByRole("cell", { name: "Tabs" }).first();
+  await activeCell.getByText("Tabs", { exact: true }).click();
+  await page.keyboard.insertText("ㄱ");
+
+  await page.locator(".bn-editor").evaluate((editor) => {
+    editor.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    editor.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+      key: "Tab",
+    }));
+    editor.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  });
+  await page.keyboard.press("Tab");
+
+  await expect.poll(() => page.evaluate(() => {
+    const selection = window.getSelection();
+    const node = selection?.focusNode;
+    return (node instanceof Element ? node : node?.parentElement)
+      ?.closest("td, th")?.textContent;
+  })).toBe("Drafting, comparing, and organizing sessions");
 });
 
 test("merges and splits selected table cells with Command+Shift+M", async ({ page }) => {
@@ -4705,6 +4821,98 @@ test("resizes selected table cells live and auto-fits columns on double click", 
   expect((await cell.boundingBox()).width).toBeLessThan(90);
 });
 
+test("keeps the focused table cell border attached through scroll and column resize", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const cell = page.getByRole("cell", {
+    name: "Drafting, comparing, and organizing sessions",
+  }).first();
+  await cell.click();
+  await expect(page.locator(".notepane-table-cell-focus-ring"))
+    .toHaveAttribute("data-cell-text", "Drafting, comparing, and organizing sessions");
+
+  await page.getByTestId("sticky-editor-surface").evaluate((surface) => {
+    surface.scrollTop += 120;
+    surface.dispatchEvent(new Event("scroll"));
+  });
+  await expectFocusedTableCellBorderToMatch(page, cell);
+
+  const cellBox = await cell.boundingBox();
+  await page.mouse.move(cellBox.x + cellBox.width - 1, cellBox.y + cellBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(cellBox.x + cellBox.width + 35, cellBox.y + cellBox.height / 2);
+  await page.mouse.up();
+  await expectFocusedTableCellBorderToMatch(page, cell);
+});
+
+test("keeps the focused cell when extending table rows or columns", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  await page.getByRole("button", { name: "Switch to Sticky windows mode" }).click();
+  const focusedCell = page.getByRole("cell", {
+    name: "Drafting, comparing, and organizing sessions",
+  }).first();
+  await focusedCell.click();
+  const lastCell = page.getByRole("cell", { name: "Export PDF" }).last();
+  await lastCell.hover();
+
+  const addColumnButton = page.locator(
+    ".bn-extend-button-add-remove-columns",
+  ).first();
+  await expect(addColumnButton).toBeVisible();
+  const addColumnButtonBox = await addColumnButton.boundingBox();
+  await page.mouse.move(
+    addColumnButtonBox.x + addColumnButtonBox.width / 2,
+    addColumnButtonBox.y + addColumnButtonBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    addColumnButtonBox.x + addColumnButtonBox.width + 220,
+    addColumnButtonBox.y + addColumnButtonBox.height / 2,
+    { steps: 4 },
+  );
+  await expectFocusedTableCellBorderToMatch(page, focusedCell);
+  await page.mouse.up();
+  await expectFocusedTableCellBorderToMatch(page, focusedCell);
+
+  await lastCell.hover();
+  const addRowButton = page.locator(
+    ".bn-extend-button-add-remove-rows",
+  ).first();
+  await expect(addRowButton).toBeVisible();
+  await addRowButton.click();
+  await expectFocusedTableCellBorderToMatch(page, focusedCell);
+});
+
+test("does not focus the first cell when clicking blank table surface", async ({ page }) => {
+  await loadTemplatePreview(page);
+  await page.getByRole("button", { name: "Use this template" }).click();
+  const focusedCell = page.getByRole("cell", {
+    name: "Drafting, comparing, and organizing sessions",
+  }).first();
+  await focusedCell.click();
+  await expect(page.locator(".notepane-table-cell-focus-ring"))
+    .toHaveAttribute("data-cell-text", "Drafting, comparing, and organizing sessions");
+
+  await page.getByRole("table").evaluate((table) => {
+    table.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+    }));
+    table.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+    }));
+    table.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+    }));
+  });
+
+  await expect(page.locator(".notepane-table-cell-focus-ring")).toHaveCount(0);
+});
+
 test("auto-fits table columns from the current font size within the editor width", async ({ page }) => {
   await loadTemplatePreview(page);
   await page.getByRole("button", { name: "Use this template" }).click();
@@ -4784,6 +4992,21 @@ async function expectEditorFocused(page) {
       return Boolean(activeElement?.closest?.(".bn-editor"));
     }),
   ).toBe(true);
+}
+
+async function expectFocusedTableCellBorderToMatch(page, cell) {
+  await expect.poll(async () => {
+    const [cellBox, ringBox, label] = await Promise.all([
+      cell.boundingBox(),
+      page.locator(".notepane-table-cell-focus-ring").boundingBox(),
+      page.locator(".notepane-table-cell-focus-ring").getAttribute("data-cell-text"),
+    ]);
+    return label === "Drafting, comparing, and organizing sessions" &&
+      Math.abs((cellBox?.x ?? 0) - (ringBox?.x ?? 0)) <= 1 &&
+      Math.abs((cellBox?.y ?? 0) - (ringBox?.y ?? 0)) <= 1 &&
+      Math.abs((cellBox?.width ?? 0) - (ringBox?.width ?? 0)) <= 1 &&
+      Math.abs((cellBox?.height ?? 0) - (ringBox?.height ?? 0)) <= 1;
+  }).toBe(true);
 }
 
 async function getBulletItemDepth(page, text) {
